@@ -1,1 +1,19 @@
-
+name,team,position,salary,projection,ownership,ceiling,floor
+Patrick Mahomes,KC,QB,11200,24.5,35,42,15
+Travis Kelce,KC,TE,9800,18.2,28,32,10
+Isiah Pacheco,KC,RB,8600,15.8,22,28,8
+Rashee Rice,KC,WR,7400,13.5,18,26,6
+Justin Watson,KC,WR,4400,7.2,8,16,2
+Mecole Hardman,KC,WR,3200,5.8,5,14,1
+Clyde Edwards-Helaire,KC,RB,4800,8.5,12,18,3
+Noah Gray,KC,TE,3800,6.2,6,13,2
+Josh Allen,BUF,QB,11400,25.1,38,44,16
+Stefon Diggs,BUF,WR,9200,16.9,24,30,8
+James Cook,BUF,RB,8800,14.7,20,27,7
+Dalton Kincaid,BUF,TE,6200,11.3,15,22,5
+Khalil Shakir,BUF,WR,5600,9.8,12,20,4
+Gabe Davis,BUF,WR,6800,12.1,14,24,5
+Dawson Knox,BUF,TE,5000,8.5,10,18,3
+Deonte Harty,BUF,WR,3400,6.1,7,15,2
+Ty Johnson,BUF,RB,3600,6.8,8,16,2
+Latavius Murray,BUF,RB,4200,7.5,9,17,3
