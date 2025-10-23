@@ -113,7 +113,7 @@ def initialize_claude_assistant():
         return None
     
     try:
-        assistant = ClaudeAssistant()
+        assistant = ClaudeAssistant(api_key=st.secrets["ANTHROPIC_API_KEY"])
         return assistant
     except Exception as e:
         st.error(f"⚠️ Could not initialize Claude AI: {str(e)}")
