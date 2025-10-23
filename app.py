@@ -77,23 +77,18 @@ if 'ai_usage_stats' not in st.session_state:
 
 
 def load_sample_data():
-    """Load sample player data"""
-    return pd.DataFrame({
-        'name': ['Patrick Mahomes', 'Travis Kelce', 'Isiah Pacheco', 'Rashee Rice', 
-                 'Josh Allen', 'Stefon Diggs', 'James Cook', 'Dalton Kincaid',
-                 'Khalil Shakir', 'Justin Watson', 'Dawson Knox', 'Gabe Davis'],
-        'team': ['KC', 'KC', 'KC', 'KC', 'BUF', 'BUF', 'BUF', 'BUF', 
-                 'BUF', 'KC', 'BUF', 'BUF'],
-        'position': ['QB', 'TE', 'RB', 'WR', 'QB', 'WR', 'RB', 'TE',
-                     'WR', 'WR', 'TE', 'WR'],
-        'salary': [11200, 9800, 8600, 7400, 11400, 9200, 8800, 6200,
-                   5600, 4400, 5000, 6800],
-        'projection': [24.5, 18.2, 15.8, 13.5, 25.1, 16.9, 14.7, 11.3,
-                       9.8, 7.2, 8.5, 12.1],
-        'ownership': [35, 28, 22, 18, 38, 24, 20, 15, 12, 8, 10, 14],
-        'ceiling': [42, 32, 28, 26, 44, 30, 27, 22, 20, 16, 18, 24],
-        'floor': [15, 10, 8, 6, 16, 8, 7, 5, 4, 2, 3, 5]
-    })
+    """Load sample player data from CSV file"""
+    try:
+        # Try to load from data directory
+        sample_path = 'data/sample_players.csv'
+        if os.path.exists(sample_path):
+            return pd.read_csv(sample_path)
+        else:
+            st.error("❌ Sample data file not found at data/sample_players.csv")
+            return None
+    except Exception as e:
+        st.error(f"❌ Error loading sample data: {str(e)}")
+        return None
 
 
 def initialize_claude_assistant():
@@ -116,7 +111,7 @@ def display_header():
     st.markdown("""
     **The Revolutionary Optimizer That Beats The Field, Not Just The Slate**
     
-    Phase 1: Core Engine - Opponent Modeling + Strategic Optimization
+    Phase 1.5: Core Engine + AI-Powered Analysis
     """)
     
     # Real-time status
@@ -139,11 +134,11 @@ def data_input_section():
     """Handle data input"""
     st.header("📊 Step 1: Load Player Data")
     
-    tab1, tab2, tab3 = st.tabs(["Upload CSV", "Use Sample Data", "Manual Entry"])
+    tab1, tab2 = st.tabs(["Upload CSV", "Use Sample Data"])
     
     with tab1:
         st.markdown("**Upload your player pool CSV**")
-        st.markdown("**Minimum required:** name, team, position, salary, projection")
+        st.markdown("**Minimum required:** name (or first_name + last_name), team, position, salary, projection")
         st.info("💡 Missing columns (ceiling, floor, ownership) will be auto-calculated!")
         
         uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
@@ -151,6 +146,12 @@ def data_input_section():
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
+                
+                # Handle first_name + last_name columns
+                if 'first_name' in df.columns and 'last_name' in df.columns:
+                    df['name'] = df['first_name'] + ' ' + df['last_name']
+                    df = df.drop(['first_name', 'last_name'], axis=1)
+                    st.info("✅ Combined first_name and last_name into name")
                 
                 # Check minimum required columns
                 required = ['name', 'team', 'position', 'salary', 'projection']
@@ -189,13 +190,11 @@ def data_input_section():
         st.markdown("**Load pre-configured sample data (KC vs BUF)**")
         
         if st.button("Load Sample Data"):
-            st.session_state.players_df = load_sample_data()
-            st.success("✅ Sample data loaded!")
-            st.dataframe(st.session_state.players_df)
-    
-    with tab3:
-        st.markdown("**Manual player entry (coming soon)**")
-        st.info("This feature will be added in the next iteration")
+            sample_df = load_sample_data()
+            if sample_df is not None:
+                st.session_state.players_df = sample_df
+                st.success("✅ Sample data loaded!")
+                st.dataframe(st.session_state.players_df)
 
 
 def opponent_modeling_section():
@@ -579,13 +578,16 @@ def display_lineups():
         st.success(f"✅ Exported to {filename}")
         
         # Provide download link
-        with open(filename, 'r') as f:
-            st.download_button(
-                label="📥 Download CSV",
-                data=f.read(),
-                file_name=filename,
-                mime='text/csv'
-            )
+        try:
+            with open(filename, 'r') as f:
+                st.download_button(
+                    label="📥 Download CSV",
+                    data=f.read(),
+                    file_name=filename,
+                    mime='text/csv'
+                )
+        except:
+            st.info("File saved locally. Check your project directory.")
 
 
 def main():
@@ -649,7 +651,7 @@ def main():
         st.markdown("""
         1. **Load Data** - Upload CSV (auto-calculates missing columns!)
         2. **Analyze Field** - Run opponent modeling
-        3. **AI Analysis** - Get ownership predictions & advice (Phase 1.5!)
+        3. **AI Analysis** - Get ownership predictions & advice
         4. **Generate Lineups** - Select mode & optimize
         5. **Export** - Download for DraftKings
         """)
