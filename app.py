@@ -12,6 +12,22 @@ from datetime import datetime
 import sys
 import os
 
+import streamlit as st
+import pandas as pd
+
+# === DEBUG SECTION - REMOVE AFTER FIXING ===
+st.write("🔍 Checking API key...")
+api_key = st.secrets.get("ANTHROPIC_API_KEY", "NOT FOUND")
+st.write(f"Key exists: {api_key != 'NOT FOUND'}")
+st.write(f"Key starts correctly: {api_key.startswith('sk-ant-') if api_key != 'NOT FOUND' else False}")
+st.write(f"Key length: {len(api_key) if api_key != 'NOT FOUND' else 0}")
+st.write("=" * 50)
+# === END DEBUG SECTION ===
+
+# Rest of your app code continues here
+st.title("NFL DFS Meta-Optimizer")
+# etc...
+
 # Add modules to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
