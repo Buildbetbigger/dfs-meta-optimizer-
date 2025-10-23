@@ -106,7 +106,7 @@ def initialize_claude_assistant():
         return assistant
     except Exception as e:
         st.error(f"⚠️ Could not initialize Claude AI: {str(e)}")
-        st.info("Make sure ANTHROPIC_API_KEY is set in your .env file")
+        st.info("Make sure ANTHROPIC_API_KEY is set in Streamlit secrets or .env file")
         return None
 
 
@@ -143,7 +143,8 @@ def data_input_section():
     
     with tab1:
         st.markdown("**Upload your player pool CSV**")
-        st.markdown("Required columns: name, team, position, salary, projection, ownership, ceiling, floor")
+        st.markdown("**Minimum required:** name, team, position, salary, projection")
+        st.info("💡 Missing columns (ceiling, floor, ownership) will be auto-calculated!")
         
         uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
         
@@ -151,16 +152,36 @@ def data_input_section():
             try:
                 df = pd.read_csv(uploaded_file)
                 
-                # Validate columns
-                required_cols = ['name', 'team', 'position', 'salary', 
-                               'projection', 'ownership', 'ceiling', 'floor']
+                # Check minimum required columns
+                required = ['name', 'team', 'position', 'salary', 'projection']
+                missing = [col for col in required if col not in df.columns]
                 
-                if all(col in df.columns for col in required_cols):
+                if missing:
+                    st.error(f"❌ Missing required columns: {', '.join(missing)}")
+                    st.info(f"Available columns: {', '.join(df.columns)}")
+                else:
+                    # Auto-calculate missing columns
+                    auto_calcs = []
+                    
+                    if 'ceiling' not in df.columns:
+                        df['ceiling'] = df['projection'] * 1.7
+                        auto_calcs.append("ceiling (projection × 1.7)")
+                    
+                    if 'floor' not in df.columns:
+                        df['floor'] = df['projection'] * 0.4
+                        auto_calcs.append("floor (projection × 0.4)")
+                    
+                    if 'ownership' not in df.columns:
+                        df['ownership'] = 15
+                        auto_calcs.append("ownership (placeholder - use AI to predict)")
+                    
+                    if auto_calcs:
+                        st.success(f"✅ Auto-calculated: {', '.join(auto_calcs)}")
+                    
                     st.session_state.players_df = df
                     st.success(f"✅ Loaded {len(df)} players successfully!")
                     st.dataframe(df)
-                else:
-                    st.error(f"❌ Missing required columns. Need: {', '.join(required_cols)}")
+                    
             except Exception as e:
                 st.error(f"❌ Error loading file: {str(e)}")
     
@@ -263,7 +284,7 @@ def opponent_modeling_section():
 def ai_assistant_section():
     """AI-powered analysis section"""
     if not ENABLE_CLAUDE_AI or not ANTHROPIC_AVAILABLE:
-        st.info("🤖 AI Assistant features require Claude API. Set ANTHROPIC_API_KEY in .env")
+        st.info("🤖 AI Assistant features require Claude API. Set ANTHROPIC_API_KEY in Streamlit secrets or .env")
         return
     
     st.header("🤖 Step 2.5: AI-Powered Analysis (Phase 1.5)")
@@ -556,6 +577,15 @@ def display_lineups():
             f"lineups_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         )
         st.success(f"✅ Exported to {filename}")
+        
+        # Provide download link
+        with open(filename, 'r') as f:
+            st.download_button(
+                label="📥 Download CSV",
+                data=f.read(),
+                file_name=filename,
+                mime='text/csv'
+            )
 
 
 def main():
@@ -617,7 +647,7 @@ def main():
         
         st.markdown("### 📚 Quick Guide")
         st.markdown("""
-        1. **Load Data** - Upload CSV or use sample
+        1. **Load Data** - Upload CSV (auto-calculates missing columns!)
         2. **Analyze Field** - Run opponent modeling
         3. **AI Analysis** - Get ownership predictions & advice (Phase 1.5!)
         4. **Generate Lineups** - Select mode & optimize
