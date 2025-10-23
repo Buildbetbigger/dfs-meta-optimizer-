@@ -127,7 +127,7 @@ PROJECTION_RANGE = {
 # ============================================================================
 
 # Claude API (Phase 1.5)
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+ANTHROPIC_API_KEY = os.getenv('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', '')
 
 # The Odds API (Vegas lines)
 ODDS_API_KEY = os.getenv('ODDS_API_KEY', '')
