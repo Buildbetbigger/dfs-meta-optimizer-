@@ -126,8 +126,16 @@ PROJECTION_RANGE = {
 # API KEYS (Load from .env file)
 # ============================================================================
 
-# Claude API (Phase 1.5)
-ANTHROPIC_API_KEY = os.getenv('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', '')
+# Claude API (Phase 1.5) - Try Streamlit secrets first, then .env
+try:
+    import streamlit as st
+    ANTHROPIC_API_KEY = st.secrets.get("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", "")
+except:
+    ANTHROPIC_API_KEY = ""
+
+# Fallback to .env if not in Streamlit secrets
+if not ANTHROPIC_API_KEY:
+    ANTHROPIC_API_KEY = os.getenv('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', '')
 
 # The Odds API (Vegas lines)
 ODDS_API_KEY = os.getenv('ODDS_API_KEY', '')
