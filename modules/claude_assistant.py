@@ -35,31 +35,59 @@ class ClaudeAssistant:
     """
     AI-powered DFS analysis using Claude API
     """
-
+    
     def __init__(self, api_key: str = None):
         """
         Initialize Claude assistant
-
+        
         Args:
             api_key: Anthropic API key (defaults to config)
         """
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("anthropic package required. Install with: pip install anthropic")
-
-        # Clean and validate API key
-        self.api_key = api_key or ANTHROPIC_API_KEY
-        if self.api_key:
-            self.api_key = str(self.api_key).strip().strip('"').strip("'")
-
-        if not self.api_key or len(self.api_key) < 20:
+        
+        # Get and clean API key
+        raw_key = api_key or ANTHROPIC_API_KEY
+        
+        # Debug: Show what we received (first/last 10 chars only for security)
+        if raw_key:
+            print(f"🔑 Raw key received: {raw_key[:10]}...{raw_key[-10:]}")
+            print(f"🔑 Key length: {len(raw_key)} chars")
+        
+        # Clean the key thoroughly
+        self.api_key = str(raw_key).strip()
+        # Remove quotes if present
+        if self.api_key.startswith('"') and self.api_key.endswith('"'):
+            self.api_key = self.api_key[1:-1]
+        if self.api_key.startswith("'") and self.api_key.endswith("'"):
+            self.api_key = self.api_key[1:-1]
+        # Remove any whitespace
+        self.api_key = self.api_key.strip()
+        
+        print(f"🔑 Cleaned key: {self.api_key[:10]}...{self.api_key[-10:]}")
+        print(f"🔑 Cleaned length: {len(self.api_key)} chars")
+        
+        # Validate
+        if not self.api_key or len(self.api_key) < 50:
             raise ValueError(
-                f"ANTHROPIC_API_KEY must be set in .env file or Streamlit secrets. "
-                f"Current key length: {len(self.api_key) if self.api_key else 0} chars"
+                f"ANTHROPIC_API_KEY too short. Got {len(self.api_key)} chars, need 50+. "
+                f"Check Streamlit secrets or .env file."
             )
-
-        self.client = Anthropic(api_key=self.api_key)
-        self.request_count = 0
-        self.total_cost = 0.0
+        
+        if not self.api_key.startswith('sk-ant-'):
+            raise ValueError(
+                f"ANTHROPIC_API_KEY format invalid. Should start with 'sk-ant-'. "
+                f"Yours starts with: {self.api_key[:10]}"
+            )
+        
+        try:
+            self.client = Anthropic(api_key=self.api_key)
+            self.request_count = 0
+            self.total_cost = 0.0
+            print("✅ Claude API client initialized successfully")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to create Anthropic client: {str(e)}")
     
     def _call_claude(self, prompt: str, system: str = None) -> str:
         """
@@ -84,13 +112,18 @@ class ClaudeAssistant:
         if system:
             kwargs["system"] = system
         
-        response = self.client.messages.create(**kwargs)
-        
-        # Track usage
-        self.request_count += 1
-        self.total_cost += 0.006  # Rough estimate
-        
-        return response.content[0].text
+        try:
+            response = self.client.messages.create(**kwargs)
+            
+            # Track usage
+            self.request_count += 1
+            self.total_cost += 0.006  # Rough estimate
+            
+            return response.content[0].text
+            
+        except Exception as e:
+            print(f"❌ Claude API call failed: {str(e)}")
+            raise
     
     def predict_ownership(self, 
                          player_data: Dict,
@@ -208,6 +241,7 @@ Respond in ONLY valid JSON format:
                 'raw_response': response if 'response' in locals() else None
             }
         except Exception as e:
+            print(f"❌ Ownership prediction failed for {player_data['name']}: {str(e)}")
             return {
                 'ownership': 15,
                 'confidence': 'low',
@@ -291,6 +325,7 @@ Respond in ONLY valid JSON format:
             return result
             
         except Exception as e:
+            print(f"❌ News analysis failed: {str(e)}")
             return {
                 'impacted_players': [],
                 'overall_strategy': f'Error analyzing news: {str(e)}',
@@ -376,6 +411,7 @@ Provide detailed analysis in clear sections."""
             }
             
         except Exception as e:
+            print(f"❌ Strategic advice failed: {str(e)}")
             return {
                 'recommendation': f'Error getting strategic advice: {str(e)}',
                 'error': str(e),
@@ -447,6 +483,7 @@ Provide scores and brief explanations for each dimension."""
             }
             
         except Exception as e:
+            print(f"❌ Lineup scoring failed: {str(e)}")
             return {
                 'analysis': f'Error scoring lineup: {str(e)}',
                 'error': str(e),
@@ -477,14 +514,20 @@ Provide scores and brief explanations for each dimension."""
             # Add player-specific context
             player_context = context.copy()
             
-            prediction = self.predict_ownership(player_dict, player_context)
-            
-            # Update dataframe
-            updated_df.at[idx, 'ownership'] = prediction['ownership']
-            updated_df.at[idx, 'ai_confidence'] = prediction['confidence']
-            updated_df.at[idx, 'ai_reasoning'] = prediction['reasoning']
-            
-            print(f"  ✓ {player['name']}: {prediction['ownership']:.1f}% (was {player['ownership']:.1f}%)")
+            try:
+                prediction = self.predict_ownership(player_dict, player_context)
+                
+                # Update dataframe
+                updated_df.at[idx, 'ownership'] = prediction['ownership']
+                updated_df.at[idx, 'ai_confidence'] = prediction['confidence']
+                updated_df.at[idx, 'ai_reasoning'] = prediction['reasoning']
+                
+                print(f"  ✓ {player['name']}: {prediction['ownership']:.1f}% (was {player['ownership']:.1f}%)")
+                
+            except Exception as e:
+                print(f"  ⚠️ {player['name']}: Failed - {str(e)}")
+                # Keep original values on error
+                continue
         
         print(f"✅ AI ownership prediction complete!")
         print(f"📊 Requests made: {self.request_count}")
