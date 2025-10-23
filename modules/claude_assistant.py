@@ -6,9 +6,6 @@ Uses Claude API to provide intelligent analysis:
 - News impact analysis
 - Strategic recommendations
 - Lineup quality scoring
-
-This replaces the need for Twitter/Reddit scraping and provides
-more intelligent analysis than rule-based systems.
 """
 
 import json
@@ -46,32 +43,22 @@ class ClaudeAssistant:
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("anthropic package required. Install with: pip install anthropic")
         
-        # Get and clean API key
+        # Get and thoroughly clean API key
         raw_key = api_key or ANTHROPIC_API_KEY
         
-        # Debug: Show what we received (first/last 10 chars only for security)
-        if raw_key:
-            print(f"🔑 Raw key received: {raw_key[:10]}...{raw_key[-10:]}")
-            print(f"🔑 Key length: {len(raw_key)} chars")
+        if not raw_key:
+            raise ValueError("ANTHROPIC_API_KEY must be set in .env file or Streamlit secrets")
         
-        # Clean the key thoroughly
+        # Clean the key - remove ALL whitespace, quotes, and newlines
         self.api_key = str(raw_key).strip()
-        # Remove quotes if present
-        if self.api_key.startswith('"') and self.api_key.endswith('"'):
-            self.api_key = self.api_key[1:-1]
-        if self.api_key.startswith("'") and self.api_key.endswith("'"):
-            self.api_key = self.api_key[1:-1]
-        # Remove any whitespace
-        self.api_key = self.api_key.strip()
+        self.api_key = self.api_key.strip('"').strip("'")
+        self.api_key = self.api_key.replace('\n', '').replace('\r', '').replace(' ', '')
         
-        print(f"🔑 Cleaned key: {self.api_key[:10]}...{self.api_key[-10:]}")
-        print(f"🔑 Cleaned length: {len(self.api_key)} chars")
-        
-        # Validate
-        if not self.api_key or len(self.api_key) < 50:
+        # Validate key format
+        if len(self.api_key) < 50:
             raise ValueError(
                 f"ANTHROPIC_API_KEY too short. Got {len(self.api_key)} chars, need 50+. "
-                f"Check Streamlit secrets or .env file."
+                f"Check your secrets configuration."
             )
         
         if not self.api_key.startswith('sk-ant-'):
@@ -80,7 +67,10 @@ class ClaudeAssistant:
                 f"Yours starts with: {self.api_key[:10]}"
             )
         
+        print(f"🔑 API Key validated: {self.api_key[:15]}...{self.api_key[-10:]} ({len(self.api_key)} chars)")
+        
         try:
+            # Create client with the cleaned key
             self.client = Anthropic(api_key=self.api_key)
             self.request_count = 0
             self.total_cost = 0.0
@@ -113,16 +103,23 @@ class ClaudeAssistant:
             kwargs["system"] = system
         
         try:
+            # Debug output
+            print(f"🤖 Making Claude API call (Request #{self.request_count + 1})...")
+            
             response = self.client.messages.create(**kwargs)
             
             # Track usage
             self.request_count += 1
             self.total_cost += 0.006  # Rough estimate
             
+            print(f"✅ API call successful")
             return response.content[0].text
             
         except Exception as e:
             print(f"❌ Claude API call failed: {str(e)}")
+            print(f"   API Key (first 15 chars): {self.api_key[:15]}...")
+            print(f"   API Key (last 10 chars): ...{self.api_key[-10:]}")
+            print(f"   Key length: {len(self.api_key)}")
             raise
     
     def predict_ownership(self, 
@@ -143,142 +140,83 @@ class ClaudeAssistant:
         system = """You are an expert DFS analyst specializing in ownership prediction.
 You understand player psychology, recency bias, narrative angles, and market behavior.
 IMPORTANT: Provide SPECIFIC, DIFFERENTIATED predictions based on each player's unique situation."""
-        
-        # Calculate value metrics to help AI differentiate
-        value_score = (player_data['projection'] / player_data['salary']) * 1000
-        
-        prompt = f"""Predict the projected ownership for this DFS player in a SHOWDOWN contest:
 
-**Player Information:**
-- Name: {player_data['name']}
-- Position: {player_data['position']}
-- Team: {player_data['team']}
-- Salary: ${player_data['salary']:,}
-- Current Projection: {player_data['projection']} points
-- Value Score: {value_score:.2f} pts per $1K
+        # Build detailed prompt
+        prompt = f"""Predict the ownership percentage for this player in a DraftKings tournament:
+
+**Player:** {player_data.get('name', 'Unknown')}
+**Team:** {player_data.get('team', 'Unknown')}
+**Position:** {player_data.get('position', 'Unknown')}
+**Salary:** ${player_data.get('salary', 0):,}
+**Projection:** {player_data.get('projection', 0):.1f} points
+**Current Ownership Estimate:** {player_data.get('ownership', 0):.1f}%
 
 **Additional Context:**
-- Recent Games: {context.get('recent_games', 'Not provided')}
-- Breaking News: {context.get('news', 'None')}
-- Vegas Lines: {context.get('vegas', 'Not provided')}
-- Game Environment: {context.get('environment', 'Standard')}
-- Contest Type: {context.get('contest_type', 'GPP')}
+{json.dumps(context, indent=2)}
 
-**Consider These DFS Psychology Factors:**
+**Analysis Required:**
+1. What is your ownership prediction? (Be specific - don't just say "moderate")
+2. What factors make this player more/less popular than projection alone suggests?
+3. Is there a narrative or recency bias affecting this player?
+4. How does the salary position influence ownership?
+5. Rate your confidence in this prediction (0-100%)
 
-1. **Salary Tier Analysis:**
-   - Is this player expensive ($9K+), mid-tier ($6-9K), or value ($<6K)?
-   - Expensive players: typically 25-40% owned
-   - Mid-tier: typically 15-30% owned
-   - Value players: typically 5-20% owned
-
-2. **Position-Specific Ownership:**
-   - QBs: Generally highest owned (30-45% for top options)
-   - Top TEs/WRs: Moderate-high owned (20-35%)
-   - RBs in showdown: Varies widely (10-30%)
-   - Value plays: Low owned (5-15%)
-
-3. **Team and Matchup Context:**
-   - Is this team favored or an underdog?
-   - High-scoring game expected or defensive struggle?
-
-4. **Value Score Impact:**
-   - High value (>2.5 pts/$1K) = typically attracts more ownership
-   - Low value (<2.0 pts/$1K) = typically lower owned
-
-**CRITICAL:** Your prediction must be SPECIFIC to this player's situation. 
-DO NOT give generic predictions. Consider their exact salary, position, team, and value.
-
-Respond in ONLY valid JSON format:
+Respond ONLY in valid JSON format:
 {{
-    "ownership": <number between 5-50 based on factors above>,
-    "confidence": "<high|medium|low>",
-    "reasoning": "<2-3 sentence explanation specific to THIS player>",
-    "factors": ["<factor1>", "<factor2>", "<factor3>"],
-    "risk": "<what could change this prediction>"
+    "ownership": <number 0-100>,
+    "confidence": <number 0-100>,
+    "reasoning": "<2-3 sentence explanation>",
+    "key_factors": ["<factor1>", "<factor2>", "<factor3>"],
+    "leverage_opportunity": "<yes|no|maybe>"
 }}"""
 
         try:
             response = self._call_claude(prompt, system)
             
-            # Parse JSON from response
+            # Clean and parse JSON
             response_clean = response.strip()
             if response_clean.startswith('```'):
                 lines = response_clean.split('\n')
                 response_clean = '\n'.join(lines[1:-1])
             
             result = json.loads(response_clean)
-            
-            # Validate and add metadata
             result['timestamp'] = datetime.now().isoformat()
-            result['player'] = player_data['name']
-            
-            # Ensure ownership is reasonable
-            if result['ownership'] < 5:
-                result['ownership'] = 5
-            elif result['ownership'] > 50:
-                result['ownership'] = 50
             
             return result
             
-        except json.JSONDecodeError as e:
-            # Fallback: Use salary-based heuristic
-            base_ownership = 15
-            if player_data['salary'] > 9000:
-                base_ownership = 30
-            elif player_data['salary'] > 7000:
-                base_ownership = 20
-            else:
-                base_ownership = 12
-                
-            return {
-                'ownership': base_ownership,
-                'confidence': 'low',
-                'reasoning': f'Fallback prediction based on salary tier (${player_data["salary"]})',
-                'factors': ['salary_based'],
-                'risk': 'Generic prediction - add context for better accuracy',
-                'error': str(e),
-                'raw_response': response if 'response' in locals() else None
-            }
         except Exception as e:
-            print(f"❌ Ownership prediction failed for {player_data['name']}: {str(e)}")
+            print(f"❌ Ownership prediction failed: {str(e)}")
             return {
-                'ownership': 15,
-                'confidence': 'low',
-                'reasoning': f'Error during prediction: {str(e)}',
-                'factors': ['error'],
-                'risk': 'Unknown',
+                'ownership': player_data.get('ownership', 10.0),
+                'confidence': 0,
+                'reasoning': f'Error: {str(e)}',
+                'key_factors': [],
+                'leverage_opportunity': 'unknown',
                 'error': str(e)
             }
     
-    def analyze_news_impact(self,
-                           news: str,
-                           players_df: pd.DataFrame) -> Dict:
+    def analyze_news_impact(self, news: str, affected_players: List[str]) -> Dict:
         """
-        Analyze how breaking news impacts the DFS slate
+        Analyze how breaking news affects player values and ownership
         
         Args:
-            news: Breaking news text
-            players_df: DataFrame with player data
+            news: News text to analyze
+            affected_players: List of potentially affected player names
         
         Returns:
-            Dictionary with impact analysis
+            Impact analysis with adjustments
         """
-        system = """You are an expert DFS analyst specializing in breaking news analysis.
-You understand how news impacts projections, ownership, and leverage."""
-        
-        # Create a simplified player summary
-        player_summary = players_df[['name', 'team', 'position', 'salary', 'projection', 'ownership']].to_string()
-        
-        prompt = f"""Analyze how this breaking news impacts the DFS slate:
+        system = """You are an expert DFS analyst who understands how news impacts
+player value, projections, and ownership in real-time."""
 
-**Breaking News:**
-{news}
+        prompt = f"""Analyze this breaking news and its DFS impact:
 
-**Current Player Pool:**
-{player_summary[:1500]}  
+**NEWS:** {news}
 
-**Your Analysis Should Cover:**
+**POTENTIALLY AFFECTED PLAYERS:**
+{json.dumps(affected_players, indent=2)}
+
+**Analysis Required:**
 1. Which specific players are impacted (positively or negatively)?
 2. How should their projections change? (numerical adjustment)
 3. How will public ownership react? (numerical adjustment)
@@ -320,7 +258,7 @@ Respond in ONLY valid JSON format:
             
             result = json.loads(response_clean)
             result['timestamp'] = datetime.now().isoformat()
-            result['news_analyzed'] = news[:100]  # Store snippet
+            result['news_analyzed'] = news[:100]
             
             return result
             
@@ -332,8 +270,7 @@ Respond in ONLY valid JSON format:
                 'urgency': 'unknown',
                 'key_takeaway': 'Unable to analyze',
                 'leverage_opportunities': [],
-                'error': str(e),
-                'raw_response': response if 'response' in locals() else None
+                'error': str(e)
             }
     
     def get_strategic_advice(self,
@@ -353,111 +290,98 @@ Respond in ONLY valid JSON format:
         """
         system = """You are an elite DFS tournament strategist and game theorist.
 You understand leverage, field dynamics, and optimal tournament strategy."""
-        
-        # Format top players
-        top_chalk = player_metrics.nlargest(5, 'ownership')[['name', 'ownership', 'projection', 'leverage']].to_string()
-        top_leverage = player_metrics.nlargest(8, 'leverage')[['name', 'ownership', 'projection', 'leverage']].to_string()
-        
-        prompt = f"""Analyze this DFS field and provide strategic recommendations:
 
-**Field Analysis:**
-- Average Ownership: {field_analysis['avg_ownership']:.1f}%
-- Chalk Players: {field_analysis['chalk_count']}
-- Field Concentration: {field_analysis['field_concentration']:.3f}
-- Average Leverage: {field_analysis['avg_leverage']:.2f}
+        # Convert metrics to dict for prompt
+        top_leverage = player_metrics.nlargest(5, 'leverage_score')[['name', 'leverage_score', 'ownership']].to_dict('records')
+        high_owned = player_metrics.nlargest(5, 'ownership')[['name', 'ownership', 'projection']].to_dict('records')
 
-**Top Chalk Players (High Ownership):**
-{top_chalk}
+        prompt = f"""Given this field analysis and player metrics, provide strategic guidance:
 
-**Top Leverage Plays:**
-{top_leverage}
+**CONTEST INFO:**
+{json.dumps(contest_info, indent=2)}
 
-**Contest Information:**
-- Type: {contest_info.get('type', 'GPP')}
-- Field Size: {contest_info.get('entries', 'Unknown')}
-- Payout Structure: {contest_info.get('payout', 'Top-heavy')}
+**FIELD ANALYSIS:**
+{json.dumps(field_analysis, indent=2)}
 
-**Provide Strategic Analysis:**
+**TOP LEVERAGE PLAYS:**
+{json.dumps(top_leverage, indent=2)}
 
-1. **Contrarian Level**: On a scale of 1-10, how contrarian should we be?
-   - 1 = Play the chalk, safe approach
-   - 10 = Maximum differentiation, very contrarian
+**HIGHEST OWNED PLAYERS:**
+{json.dumps(high_owned, indent=2)}
 
-2. **Chalk Fades**: Which highly-owned players should we fade and why?
+**Strategic Questions:**
+1. What should the contrarian threshold be for this contest?
+2. Which chalk plays should I fade vs play through?
+3. What's the optimal captain strategy?
+4. Should I employ naked fades? If so, on whom?
+5. How correlated should my builds be?
+6. What's my overall lineup construction philosophy for this field?
 
-3. **Leverage Emphasis**: Which leverage plays deserve increased exposure?
-
-4. **Stacking Strategy**: What's the optimal stacking approach for this field?
-   - Game stacks (QB + pass catchers)
-   - Bring-back strategies
-   - Correlation plays
-
-5. **Captain Strategy**: How should we approach captain selection?
-
-6. **Game Theory**: What does the field NOT see that we should exploit?
-
-Think through: If 40% of the field builds similar lineups, what do we need to do to beat them?
-
-Provide detailed analysis in clear sections."""
+Provide actionable strategic recommendations in ONLY valid JSON format:
+{{
+    "contrarian_threshold": <0-100>,
+    "chalk_to_fade": ["<player1>", "<player2>"],
+    "chalk_to_play": ["<player1>", "<player2>"],
+    "leverage_targets": ["<player1>", "<player2>"],
+    "captain_philosophy": "<brief description>",
+    "correlation_advice": "<brief description>",
+    "key_insight": "<most important strategic takeaway>",
+    "optimal_mode": "<CASH|GPP|CONTRARIAN|BALANCED>",
+    "confidence": <0-100>
+}}"""
 
         try:
             response = self._call_claude(prompt, system)
             
-            return {
-                'recommendation': response,
-                'timestamp': datetime.now().isoformat(),
-                'field_state': field_analysis,
-                'contest_type': contest_info.get('type')
-            }
+            # Clean and parse JSON
+            response_clean = response.strip()
+            if response_clean.startswith('```'):
+                lines = response_clean.split('\n')
+                response_clean = '\n'.join(lines[1:-1])
+            
+            result = json.loads(response_clean)
+            result['timestamp'] = datetime.now().isoformat()
+            
+            return result
             
         except Exception as e:
             print(f"❌ Strategic advice failed: {str(e)}")
             return {
-                'recommendation': f'Error getting strategic advice: {str(e)}',
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
+                'contrarian_threshold': 50,
+                'chalk_to_fade': [],
+                'chalk_to_play': [],
+                'leverage_targets': [],
+                'captain_philosophy': f'Error: {str(e)}',
+                'correlation_advice': 'Unable to provide',
+                'key_insight': 'Error getting advice',
+                'optimal_mode': 'BALANCED',
+                'confidence': 0,
+                'error': str(e)
             }
     
-    def score_lineup_quality(self,
-                            lineup: Dict,
-                            field_context: Dict,
-                            opponent_model) -> Dict:
+    def score_lineup_quality(self, lineup: Dict, field_context: Dict) -> Dict:
         """
-        Get AI analysis of lineup quality and suggestions
+        Score a lineup's quality across multiple dimensions
         
         Args:
-            lineup: Lineup dictionary with players and metrics
-            field_context: Current field state
-            opponent_model: OpponentModel instance for data
+            lineup: Lineup dictionary with players
+            field_context: Field ownership and correlation data
         
         Returns:
-            Quality score and recommendations
+            Multi-dimensional quality scores
         """
-        system = """You are an expert DFS lineup evaluator.
-You assess tournament equity, correlation, leverage, and game theory."""
-        
-        metrics = lineup['metrics']
-        
-        prompt = f"""Evaluate this DFS Showdown lineup:
+        system = """You are an expert DFS lineup evaluator who understands
+tournament equity, game theory, and winning lineup construction."""
 
-**Lineup Construction:**
-- Captain: {lineup['captain']}
-- Flex Players: {', '.join(lineup['flex'])}
+        prompt = f"""Evaluate this DFS lineup across multiple dimensions:
 
-**Lineup Metrics:**
-- Total Projection: {metrics['total_projection']:.1f} points
-- Total Ceiling: {metrics['total_ceiling']:.1f} points
-- Average Ownership: {metrics['avg_ownership']:.1f}%
-- Uniqueness: {metrics['uniqueness']:.1f}%
-- Total Salary: ${metrics['total_salary']:,}
-- Salary Remaining: ${metrics['salary_remaining']:,}
+**LINEUP:**
+{json.dumps(lineup, indent=2)}
 
-**Field Context:**
-- Average Field Ownership: {field_context.get('avg_ownership', 'Unknown')}%
-- Field Concentration: {field_context.get('field_concentration', 'Unknown')}
+**FIELD CONTEXT:**
+{json.dumps(field_context, indent=2)}
 
-**Evaluate This Lineup (0-100 score) On:**
-
+**Evaluate on these dimensions:**
 1. **Tournament Equity (0-100)**: Probability of winning vs the field
 2. **Correlation Quality (0-100)**: How well do players work together?
 3. **Leverage vs Field (0-100)**: Differentiation value
@@ -471,23 +395,51 @@ You assess tournament equity, correlation, leverage, and game theory."""
 - Game scripts where this lineup thrives
 - Game scripts where this lineup struggles
 
-Provide scores and brief explanations for each dimension."""
+Provide scores and brief explanations for each dimension in ONLY valid JSON format:
+{{
+    "tournament_equity": <0-100>,
+    "correlation_quality": <0-100>,
+    "leverage_score": <0-100>,
+    "uniqueness_value": <0-100>,
+    "game_theory_score": <0-100>,
+    "overall_grade": "<A+|A|A-|B+|B|B-|C+|C|C-|D|F>",
+    "biggest_strength": "<brief description>",
+    "biggest_weakness": "<brief description>",
+    "improvement_suggestion": "<specific actionable advice>",
+    "ideal_game_script": "<description>",
+    "poor_game_script": "<description>"
+}}"""
 
         try:
             response = self._call_claude(prompt, system)
             
-            return {
-                'analysis': response,
-                'timestamp': datetime.now().isoformat(),
-                'lineup_id': lineup.get('lineup_id')
-            }
+            # Clean and parse JSON
+            response_clean = response.strip()
+            if response_clean.startswith('```'):
+                lines = response_clean.split('\n')
+                response_clean = '\n'.join(lines[1:-1])
+            
+            result = json.loads(response_clean)
+            result['timestamp'] = datetime.now().isoformat()
+            result['lineup_id'] = lineup.get('lineup_id')
+            
+            return result
             
         except Exception as e:
             print(f"❌ Lineup scoring failed: {str(e)}")
             return {
-                'analysis': f'Error scoring lineup: {str(e)}',
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
+                'tournament_equity': 0,
+                'correlation_quality': 0,
+                'leverage_score': 0,
+                'uniqueness_value': 0,
+                'game_theory_score': 0,
+                'overall_grade': 'F',
+                'biggest_strength': 'Unknown',
+                'biggest_weakness': f'Error: {str(e)}',
+                'improvement_suggestion': 'Unable to evaluate',
+                'ideal_game_script': 'Unknown',
+                'poor_game_script': 'Unknown',
+                'error': str(e)
             }
     
     def batch_predict_ownership(self,
@@ -522,7 +474,7 @@ Provide scores and brief explanations for each dimension."""
                 updated_df.at[idx, 'ai_confidence'] = prediction['confidence']
                 updated_df.at[idx, 'ai_reasoning'] = prediction['reasoning']
                 
-                print(f"  ✓ {player['name']}: {prediction['ownership']:.1f}% (was {player['ownership']:.1f}%)")
+                print(f"  ✓ {player['name']}: {prediction['ownership']:.1f}% (confidence: {prediction['confidence']}%)")
                 
             except Exception as e:
                 print(f"  ⚠️ {player['name']}: Failed - {str(e)}")
