@@ -26,6 +26,14 @@ st.write("=" * 50)
 
 # Rest of your app code continues here
 st.title("NFL DFS Meta-Optimizer")
+# === TEMPORARY FIX - REMOVE AFTER WORKING ===
+if st.button("🔧 Clear Session & Reinit", type="primary"):
+    # Clear the bad assistant
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.success("Session cleared! The app will reload...")
+    st.rerun()
+# === END TEMPORARY FIX ===
 # etc...
 
 # Add modules to path
