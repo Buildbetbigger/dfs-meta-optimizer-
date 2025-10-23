@@ -35,21 +35,28 @@ class ClaudeAssistant:
     """
     AI-powered DFS analysis using Claude API
     """
-    
+
     def __init__(self, api_key: str = None):
         """
         Initialize Claude assistant
-        
+
         Args:
             api_key: Anthropic API key (defaults to config)
         """
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("anthropic package required. Install with: pip install anthropic")
-        
+
+        # Clean and validate API key
         self.api_key = api_key or ANTHROPIC_API_KEY
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY must be set in .env file or Streamlit secrets")
-        
+        if self.api_key:
+            self.api_key = str(self.api_key).strip().strip('"').strip("'")
+
+        if not self.api_key or len(self.api_key) < 20:
+            raise ValueError(
+                f"ANTHROPIC_API_KEY must be set in .env file or Streamlit secrets. "
+                f"Current key length: {len(self.api_key) if self.api_key else 0} chars"
+            )
+
         self.client = Anthropic(api_key=self.api_key)
         self.request_count = 0
         self.total_cost = 0.0
