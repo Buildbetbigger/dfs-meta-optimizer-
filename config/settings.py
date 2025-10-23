@@ -123,19 +123,22 @@ PROJECTION_RANGE = {
 }
 
 # ============================================================================
-# API KEYS (Load from .env file)
+# API KEYS (Load from Streamlit secrets or .env file)
 # ============================================================================
 
 # Claude API (Phase 1.5) - Try Streamlit secrets first, then .env
+ANTHROPIC_API_KEY = "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"
+
 try:
     import streamlit as st
-    ANTHROPIC_API_KEY = st.secrets.get("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", "")
+    if hasattr(st, 'secrets') and "ANTHROPIC_API_KEY" in st.secrets:
+        ANTHROPIC_API_KEY = str(st.secrets["ANTHROPIC_API_KEY"]).strip().strip('"').strip("'")
 except:
-    ANTHROPIC_API_KEY = ""
+    pass
 
 # Fallback to .env if not in Streamlit secrets
 if not ANTHROPIC_API_KEY:
-    ANTHROPIC_API_KEY = os.getenv('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', '')
+    ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '').strip().strip('"').strip("'")
 
 # The Odds API (Vegas lines)
 ODDS_API_KEY = os.getenv('ODDS_API_KEY', '')
