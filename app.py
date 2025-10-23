@@ -26,6 +26,7 @@ st.write("=" * 50)
 
 # Rest of your app code continues here
 st.title("NFL DFS Meta-Optimizer")
+
 # === TEMPORARY FIX - REMOVE AFTER WORKING ===
 if st.button("🔧 Clear Session & Reinit", type="primary"):
     # Clear the bad assistant
