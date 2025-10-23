@@ -127,7 +127,7 @@ PROJECTION_RANGE = {
 # ============================================================================
 
 # Claude API (Phase 1.5) - Try Streamlit secrets first, then .env
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"
 
 try:
     import streamlit as st
