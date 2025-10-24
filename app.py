@@ -503,26 +503,82 @@ def ai_assistant_section():
                 field_size = st.number_input("Field Size", min_value=10, max_value=100000, value=10000, step=100)
             
             if st.button("🧠 Get Strategic Advice", type="primary"):
-                with st.spinner("🤖 Claude is analyzing the field..."):
-                    field_dist = st.session_state.opponent_model.predict_field_distribution()
-                    player_metrics = st.session_state.opponent_model.get_players_dataframe()
+                try:
+                    with st.spinner("🤖 Claude is analyzing the field..."):
+                        field_dist = st.session_state.opponent_model.predict_field_distribution()
+                        player_metrics = st.session_state.opponent_model.get_players_dataframe()
+                        
+                        contest_info = {
+                            'type': contest_type_adv,
+                            'entries': field_size,
+                            'payout': 'Top-heavy' if contest_type_adv == 'GPP' else 'Double-up'
+                        }
+                        
+                        advice = assistant.get_strategic_advice(
+                            field_dist,
+                            player_metrics,
+                            contest_info
+                        )
+                        
+                        st.markdown("#### 🎯 Strategic Recommendations")
+                        
+                        # Display key metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Contrarian Threshold", f"{advice.get('contrarian_threshold', 50)}%")
+                        with col2:
+                            st.metric("Optimal Mode", advice.get('optimal_mode', 'BALANCED'))
+                        with col3:
+                            st.metric("Confidence", f"{advice.get('confidence', 0)}%")
+                        
+                        st.markdown("---")
+                        
+                        # Key insight
+                        st.info(f"**💡 Key Insight:** {advice.get('key_insight', 'N/A')}")
+                        
+                        # Strategic details in columns
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**Captain Strategy:**")
+                            st.write(advice.get('captain_philosophy', 'N/A'))
+                            
+                            st.markdown("**Correlation Advice:**")
+                            st.write(advice.get('correlation_advice', 'N/A'))
+                        
+                        with col2:
+                            if advice.get('chalk_to_fade'):
+                                st.markdown("**🚫 Chalk to Fade:**")
+                                for player in advice['chalk_to_fade']:
+                                    st.write(f"• {player}")
+                            
+                            if advice.get('chalk_to_play'):
+                                st.markdown("**✅ Chalk to Play:**")
+                                for player in advice['chalk_to_play']:
+                                    st.write(f"• {player}")
+                            
+                            if advice.get('leverage_targets'):
+                                st.markdown("**💎 Leverage Targets:**")
+                                for player in advice['leverage_targets']:
+                                    st.write(f"• {player}")
+                        
+                        st.info("💡 Use these insights when generating lineups in the next step")
+                
+                except Exception as e:
+                    st.error(f"❌ Strategic advice failed: {str(e)}")
                     
-                    contest_info = {
-                        'type': contest_type_adv,
-                        'entries': field_size,
-                        'payout': 'Top-heavy' if contest_type_adv == 'GPP' else 'Double-up'
-                    }
+                    # Show detailed error
+                    import traceback
+                    with st.expander("Show detailed error"):
+                        st.code(traceback.format_exc())
                     
-                    advice = assistant.get_strategic_advice(
-                        field_dist,
-                        player_metrics,
-                        contest_info
-                    )
-                    
-                    st.markdown("#### 🎓 Strategic Analysis")
-                    st.markdown(advice['recommendation'])
-                    
-                    st.info("💡 Use these insights when generating lineups in the next step")
+                    # Suggest solutions
+                    st.warning("💡 Try these solutions:")
+                    st.markdown("""
+                    1. Make sure you've run "Analyze Field" first
+                    2. Check that player data includes required columns (name, ownership, projection)
+                    3. Click "🔄 Reinitialize Assistant" if you see API errors
+                    """)
 
 
 def lineup_optimization_section():
