@@ -12,31 +12,6 @@ from datetime import datetime
 import sys
 import os
 
-import streamlit as st
-import pandas as pd
-
-# === DEBUG SECTION - REMOVE AFTER FIXING ===
-st.write("🔍 Checking API key...")
-api_key = st.secrets.get("ANTHROPIC_API_KEY", "NOT FOUND")
-st.write(f"Key exists: {api_key != 'NOT FOUND'}")
-st.write(f"Key starts correctly: {api_key.startswith('sk-ant-') if api_key != 'NOT FOUND' else False}")
-st.write(f"Key length: {len(api_key) if api_key != 'NOT FOUND' else 0}")
-st.write("=" * 50)
-# === END DEBUG SECTION ===
-
-# Rest of your app code continues here
-st.title("NFL DFS Meta-Optimizer")
-
-# === TEMPORARY FIX - REMOVE AFTER WORKING ===
-if st.button("🔧 Clear Session & Reinit", type="primary"):
-    # Clear the bad assistant
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.success("Session cleared! The app will reload...")
-    st.rerun()
-# === END TEMPORARY FIX ===
-# etc...
-
 # Add modules to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -117,16 +92,50 @@ def load_sample_data():
 
 
 def initialize_claude_assistant():
-    """Initialize Claude AI assistant"""
+    """Initialize Claude AI assistant with proper validation"""
     if not ENABLE_CLAUDE_AI or not ANTHROPIC_AVAILABLE:
+        st.warning("⚠️ Claude AI is disabled or anthropic package not available")
         return None
     
     try:
-        assistant = ClaudeAssistant(api_key=st.secrets["ANTHROPIC_API_KEY"])
-        return assistant
+        # Step 1: Check if key exists in secrets
+        if "ANTHROPIC_API_KEY" not in st.secrets:
+            st.error("❌ ANTHROPIC_API_KEY not found in Streamlit secrets!")
+            st.info("Add it in Settings → Secrets on Streamlit Cloud, or in .streamlit/secrets.toml locally")
+            return None
+        
+        # Step 2: Get the key
+        api_key = st.secrets["ANTHROPIC_API_KEY"]
+        
+        # Step 3: Validate key format
+        if not api_key or len(api_key) < 50:
+            st.error(f"❌ API key too short: {len(api_key) if api_key else 0} chars (need 50+)")
+            return None
+        
+        if not api_key.startswith('sk-ant-'):
+            st.error(f"❌ API key format invalid. Should start with 'sk-ant-'")
+            st.info(f"Your key starts with: {api_key[:10]}")
+            return None
+        
+        # Step 4: Show confirmation (without revealing full key)
+        with st.spinner("Initializing Claude AI..."):
+            st.info(f"🔑 Using API key: {api_key[:15]}...{api_key[-10:]} ({len(api_key)} chars)")
+            
+            # Step 5: Create assistant - FORCE the key, never let it fall back
+            assistant = ClaudeAssistant(api_key=str(api_key).strip())
+            
+            st.success("✅ Claude AI initialized successfully!")
+            return assistant
+        
     except Exception as e:
-        st.error(f"⚠️ Could not initialize Claude AI: {str(e)}")
-        st.info("Make sure ANTHROPIC_API_KEY is set in Streamlit secrets or .env file")
+        st.error(f"❌ Failed to initialize Claude AI")
+        st.error(f"Error: {str(e)}")
+        
+        # Show full traceback for debugging
+        import traceback
+        with st.expander("Show detailed error"):
+            st.code(traceback.format_exc())
+        
         return None
 
 
@@ -315,14 +324,37 @@ def ai_assistant_section():
     
     # Initialize Claude assistant if needed
     if st.session_state.claude_assistant is None:
-        if st.button("🚀 Initialize AI Assistant"):
-            st.session_state.claude_assistant = initialize_claude_assistant()
-            if st.session_state.claude_assistant:
-                st.success("✅ AI Assistant ready!")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🚀 Initialize AI Assistant", type="primary"):
+                st.session_state.claude_assistant = initialize_claude_assistant()
+                if st.session_state.claude_assistant:
+                    st.rerun()
+        with col2:
+            if st.button("🔄 Clear Session State"):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.success("Session cleared! Reloading...")
                 st.rerun()
         return
     
     assistant = st.session_state.claude_assistant
+    
+    # Add force reinitialize option
+    with st.expander("⚙️ Assistant Settings"):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Reinitialize Assistant"):
+                st.session_state.claude_assistant = None
+                st.rerun()
+        with col2:
+            if st.button("🧪 Test API Connection"):
+                try:
+                    # Make a simple test call
+                    test_response = assistant._call_claude("Say 'API test successful'")
+                    st.success(f"✅ API Working! Response: {test_response}")
+                except Exception as e:
+                    st.error(f"❌ API Test Failed: {str(e)}")
     
     # Display AI usage stats
     stats = assistant.get_usage_stats()
@@ -366,22 +398,39 @@ def ai_assistant_section():
                     'contest_type': contest_type
                 }
                 
-                with st.spinner("🤖 Claude is analyzing ownership patterns..."):
-                    updated_df = assistant.batch_predict_ownership(
-                        st.session_state.players_df,
-                        context
-                    )
-                    st.session_state.players_df = updated_df
-                    st.session_state.last_update = datetime.now()
+                try:
+                    with st.spinner("🤖 Claude is analyzing ownership patterns..."):
+                        updated_df = assistant.batch_predict_ownership(
+                            st.session_state.players_df,
+                            context
+                        )
+                        st.session_state.players_df = updated_df
+                        st.session_state.last_update = datetime.now()
+                        
+                        st.success("✅ AI ownership predictions updated!")
+                        
+                        # Show before/after comparison
+                        st.markdown("#### 📊 Ownership Changes")
+                        comparison_df = updated_df[['name', 'ownership', 'ai_confidence', 'ai_reasoning']].copy()
+                        st.dataframe(comparison_df, use_container_width=True)
+                        
+                        st.info("💡 **Tip:** Now run 'Analyze Field' to recalculate leverage with AI predictions")
+                
+                except Exception as e:
+                    st.error(f"❌ Ownership prediction failed: {str(e)}")
                     
-                    st.success("✅ AI ownership predictions updated!")
+                    # Show detailed error
+                    import traceback
+                    with st.expander("Show detailed error"):
+                        st.code(traceback.format_exc())
                     
-                    # Show before/after comparison
-                    st.markdown("#### 📊 Ownership Changes")
-                    comparison_df = updated_df[['name', 'ownership', 'ai_confidence', 'ai_reasoning']].copy()
-                    st.dataframe(comparison_df, use_container_width=True)
-                    
-                    st.info("💡 **Tip:** Now run 'Analyze Field' to recalculate leverage with AI predictions")
+                    # Suggest solutions
+                    st.warning("💡 Try these solutions:")
+                    st.markdown("""
+                    1. Click "🔄 Reinitialize Assistant" in Assistant Settings above
+                    2. Check that your API key is valid at https://console.anthropic.com
+                    3. Clear session state and try again
+                    """)
     
     with ai_tab2:
         st.markdown("### 📰 Breaking News Analysis")
@@ -396,9 +445,12 @@ def ai_assistant_section():
         if st.button("🔍 Analyze News Impact", disabled=not news_input):
             if st.session_state.players_df is not None:
                 with st.spinner("🤖 Claude is analyzing news impact..."):
+                    # Pass list of player names, not the whole dataframe
+                    player_names = st.session_state.players_df['name'].tolist()
+                    
                     impact = assistant.analyze_news_impact(
                         news_input,
-                        st.session_state.players_df
+                        player_names
                     )
                     
                     st.markdown("#### 📊 Impact Analysis")
