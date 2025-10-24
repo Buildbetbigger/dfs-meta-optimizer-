@@ -292,6 +292,20 @@ Respond in ONLY valid JSON format:
 You understand leverage, field dynamics, and optimal tournament strategy."""
 
         # Convert metrics to dict for prompt
+        # Calculate leverage_score if it doesn't exist
+        if 'leverage_score' not in player_metrics.columns:
+            player_metrics = player_metrics.copy()
+            if 'ceiling' in player_metrics.columns and 'ownership' in player_metrics.columns:
+                # Leverage = ceiling / ownership (higher is better)
+                player_metrics['leverage_score'] = player_metrics['ceiling'] / (player_metrics['ownership'] + 0.1)
+            elif 'projection' in player_metrics.columns and 'ownership' in player_metrics.columns:
+                # Fallback to projection / ownership
+                player_metrics['leverage_score'] = player_metrics['projection'] / (player_metrics['ownership'] + 0.1)
+            else:
+                # Last resort: just use projection
+                player_metrics['leverage_score'] = player_metrics.get('projection', 10.0)
+        
+        # Get top leverage and high owned players
         top_leverage = player_metrics.nlargest(5, 'leverage_score')[['name', 'leverage_score', 'ownership']].to_dict('records')
         high_owned = player_metrics.nlargest(5, 'ownership')[['name', 'ownership', 'projection']].to_dict('records')
 
