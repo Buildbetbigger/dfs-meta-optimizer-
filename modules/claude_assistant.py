@@ -308,20 +308,39 @@ You understand leverage, field dynamics, and optimal tournament strategy."""
         # Get top leverage and high owned players
         top_leverage = player_metrics.nlargest(5, 'leverage_score')[['name', 'leverage_score', 'ownership']].to_dict('records')
         high_owned = player_metrics.nlargest(5, 'ownership')[['name', 'ownership', 'projection']].to_dict('records')
+        
+        # Convert field_analysis to JSON-serializable format (handle numpy types)
+        def make_serializable(obj):
+            """Convert numpy/pandas types to native Python types"""
+            if isinstance(obj, dict):
+                return {k: make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_serializable(item) for item in obj]
+            elif hasattr(obj, 'item'):  # numpy types
+                return obj.item()
+            elif hasattr(obj, 'tolist'):  # numpy arrays
+                return obj.tolist()
+            else:
+                return obj
+        
+        field_analysis_clean = make_serializable(field_analysis)
+        contest_info_clean = make_serializable(contest_info)
+        top_leverage_clean = make_serializable(top_leverage)
+        high_owned_clean = make_serializable(high_owned)
 
         prompt = f"""Given this field analysis and player metrics, provide strategic guidance:
 
 **CONTEST INFO:**
-{json.dumps(contest_info, indent=2)}
+{json.dumps(contest_info_clean, indent=2)}
 
 **FIELD ANALYSIS:**
-{json.dumps(field_analysis, indent=2)}
+{json.dumps(field_analysis_clean, indent=2)}
 
 **TOP LEVERAGE PLAYS:**
-{json.dumps(top_leverage, indent=2)}
+{json.dumps(top_leverage_clean, indent=2)}
 
 **HIGHEST OWNED PLAYERS:**
-{json.dumps(high_owned, indent=2)}
+{json.dumps(high_owned_clean, indent=2)}
 
 **Strategic Questions:**
 1. What should the contrarian threshold be for this contest?
