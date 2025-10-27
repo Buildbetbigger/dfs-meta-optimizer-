@@ -622,6 +622,39 @@ def lineup_optimization_section():
                 st.session_state.opponent_model.get_players_dataframe(),
                 st.session_state.opponent_model
             )
+
+            # Create a placeholder for debug output
+            debug_placeholder = st.empty()
+
+            # Monkey-patch print to capture output
+            import io
+            import sys
+            debug_output = io.StringIO()
+            old_stdout = sys.stdout
+            sys.stdout = debug_output
+
+            try:
+                # Generate lineups (prints will be captured)
+                
+                lineups = optimizer.generate_lineups(
+                    num_lineups=num_lineups,
+                    mode=mode,
+                    max_exposure=max_exposure
+                )
+
+                # Restore stdout
+                sys.stdout = old_stdout
+
+                # Show debug output in UI
+                debug_text = debug_output.getvalue()
+                if debug_text:
+                    with st.expander("🔍 Debug Output", expanded=True):
+                        st.text(debug_text)
+
+            except Exception as e:
+                sys.stdout = old_stdout
+                st.error(f"Error: {str(e)}")
+                raise
             
             lineups = optimizer.generate_lineups(
                 num_lineups=num_lineups,
