@@ -259,7 +259,7 @@ class OpponentModel:
         captain_data = self._get_player_data_safe(captain)
         
         if captain_data is None:
-            # Captain not found - return default metrics
+            # Captain not found - return ZERO salary to trigger rejection
             print(f"ERROR: Captain '{captain}' not found in opponent model!")
             return {
                 'total_projection': 0.0,
@@ -270,18 +270,28 @@ class OpponentModel:
                 'lineup_leverage': 0.0,
                 'chalk_count': 0,
                 'contrarian_count': 0,
-                'total_salary': 50000,
-                'salary_remaining': 0
+                'total_salary': 0,  # CHANGED: Return 0 to fail validation
+                'salary_remaining': 50000
             }
         
-        # Filter lineup players - clean names first
-        clean_lineup = [str(p).strip() for p in lineup]
-        lineup_players = self.players_df[
-            self.players_df['name'].isin(clean_lineup)
-        ]
+        # CRITICAL FIX: Look up each player individually using safe method
+        flex_players_data = []
+        missing_players = []
         
-        if len(lineup_players) == 0:
-            print(f"ERROR: No players found in lineup: {lineup}")
+        for player_name in lineup:
+            # Skip captain
+            if str(player_name).strip() == captain:
+                continue
+            
+            player_data = self._get_player_data_safe(player_name)
+            if player_data is not None:
+                flex_players_data.append(player_data)
+            else:
+                missing_players.append(player_name)
+        
+        # If any flex players missing, return ZERO salary to fail validation
+        if len(missing_players) > 0:
+            print(f"ERROR: Missing flex players: {missing_players}")
             return {
                 'total_projection': 0.0,
                 'total_ceiling': 0.0,
@@ -291,30 +301,43 @@ class OpponentModel:
                 'lineup_leverage': 0.0,
                 'chalk_count': 0,
                 'contrarian_count': 0,
-                'total_salary': 50000,
-                'salary_remaining': 0
+                'total_salary': 0,  # CHANGED: Return 0 to fail validation
+                'salary_remaining': 50000
             }
+        
+        # Should have exactly 5 flex players
+        if len(flex_players_data) != 5:
+            print(f"ERROR: Wrong number of flex players: {len(flex_players_data)} (expected 5)")
+            return {
+                'total_projection': 0.0,
+                'total_ceiling': 0.0,
+                'total_floor': 0.0,
+                'avg_ownership': 15.0,
+                'uniqueness': 85.0,
+                'lineup_leverage': 0.0,
+                'chalk_count': 0,
+                'contrarian_count': 0,
+                'total_salary': 0,  # CHANGED: Return 0 to fail validation
+                'salary_remaining': 50000
+            }
+        
+        # Convert list of Series to DataFrame
+        flex_df = pd.DataFrame(flex_players_data)
         
         # Calculate total projection
         captain_points = captain_data['projection'] * CAPTAIN_MULTIPLIER
-        flex_points = lineup_players[
-            lineup_players['name'] != captain
-        ]['projection'].sum()
+        flex_points = flex_df['projection'].sum()
         total_projection = captain_points + flex_points
         
         # Calculate total ceiling
         captain_ceiling = captain_data['ceiling'] * CAPTAIN_MULTIPLIER
-        flex_ceiling = lineup_players[
-            lineup_players['name'] != captain
-        ]['ceiling'].sum()
+        flex_ceiling = flex_df['ceiling'].sum()
         total_ceiling = captain_ceiling + flex_ceiling
         
         # Calculate ownership metrics
         captain_own = captain_data['ownership'] * 1.5  # Weight captain more
-        flex_own = lineup_players[
-            lineup_players['name'] != captain
-        ]['ownership'].sum()
-        avg_ownership = (captain_own + flex_own) / len(lineup)
+        flex_own = flex_df['ownership'].sum()
+        avg_ownership = (captain_own + flex_own) / 6  # Always 6 players
         
         # Calculate uniqueness (inverse of ownership)
         uniqueness = 100 - avg_ownership
@@ -323,21 +346,24 @@ class OpponentModel:
         lineup_leverage = total_ceiling / (avg_ownership + 1)  # Avoid div by 0
         
         # Count chalk and contrarian players
-        chalk_count = lineup_players['chalk_flag'].sum()
-        contrarian_count = lineup_players['contrarian_flag'].sum()
+        chalk_count = int(captain_data.get('chalk_flag', False)) + flex_df['chalk_flag'].sum()
+        contrarian_count = int(captain_data.get('contrarian_flag', False)) + flex_df['contrarian_flag'].sum()
         
-        # Calculate salary
+        # CRITICAL FIX: Calculate salary correctly
         captain_salary = captain_data['salary'] * CAPTAIN_MULTIPLIER
-        flex_salary = lineup_players[
-            lineup_players['name'] != captain
-        ]['salary'].sum()
+        flex_salary = flex_df['salary'].sum()
         total_salary = captain_salary + flex_salary
+        
+        # DEBUG: Print salary breakdown
+        print(f"\n   💰 Salary breakdown:")
+        print(f"      Captain ({captain}): ${captain_data['salary']:,} × 1.5 = ${captain_salary:,}")
+        print(f"      Flex total (5 players): ${flex_salary:,}")
+        print(f"      TOTAL: ${total_salary:,} ({(total_salary/50000)*100:.1f}%)")
         
         return {
             'total_projection': total_projection,
             'total_ceiling': total_ceiling,
-            'total_floor': captain_data['floor'] * CAPTAIN_MULTIPLIER + 
-                          lineup_players[lineup_players['name'] != captain]['floor'].sum(),
+            'total_floor': captain_data['floor'] * CAPTAIN_MULTIPLIER + flex_df['floor'].sum(),
             'avg_ownership': avg_ownership,
             'uniqueness': uniqueness,
             'lineup_leverage': lineup_leverage,
