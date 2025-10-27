@@ -411,36 +411,34 @@ def sidebar_info():
     with st.sidebar:
         st.title("🎯 DFS Meta-Optimizer")
         st.markdown("---")
-        
+
         st.subheader("📖 About")
         st.write("""
         This optimizer uses **opponent modeling** to find lineups
         that maximize your competitive advantage, not just points.
         """)
-        
+
         st.markdown("---")
         st.subheader("⚙️ Settings")
-        
+
         st.write(f"**Salary Cap:** ${SALARY_CAP:,}")
-        st.write(f"**Roster Size:** {ROSTER_SIZE} ({ROSTER_SIZE-1} flex + 1 captain)")
+        st.write(f"**Roster Size:** {ROSTER_SIZE} ({ROSTER_SIZE - 1} flex + 1 captain)")
         st.write(f"**Captain Multiplier:** {CAPTAIN_MULTIPLIER}x")
-        
+
         if CLAUDE_AVAILABLE and st.session_state.claude_assistant:
             st.success("✅ Claude AI: Active")
         else:
             st.warning("⚠️ Claude AI: Inactive")
-        
+
         st.markdown("---")
         st.subheader("📊 Optimization Modes")
-        
+
         for mode, config in OPTIMIZATION_MODES.items():
             st.write(f"**{mode.title()}:**")
-            st.write(f"- Projection: {config['projection_weight']}")
-            st.write(f"- Ownership: {config['ownership_weight']}")
-            st.write(f"- Leverage: {config['leverage_weight']}")
-            st.write(f"- Ceiling: {config['ceiling_weight']}")
+            st.write(f"- Projection: {config.get('projection_weight', 0)}")
+            st.write(f"- Leverage: {config.get('leverage_weight', 0)}")
+            st.write(f"- Ceiling: {config.get('ceiling_weight', 0)}")
             st.write("")
-
 
 def main():
     """Main application function"""
