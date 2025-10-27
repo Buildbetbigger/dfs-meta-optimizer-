@@ -230,6 +230,14 @@ class LineupOptimizer:
             captain
         )
         
+        # CRITICAL FIX: Validate salary usage (should use 98%+ of cap)
+        salary_used = metrics['total_salary']
+        salary_used_pct = (salary_used / SALARY_CAP) * 100
+        
+        if salary_used_pct < 96.0:  # Reject if using less than 96% ($48,000)
+            # This lineup doesn't use enough salary - reject it
+            return None
+        
         return {
             'lineup_id': iteration + 1,
             'captain': captain,
@@ -402,6 +410,88 @@ class LineupOptimizer:
         
         return selected_flex
     
+    def _optimize_lineup_salary(self,
+                                selected_flex: List[str],
+                                flex_candidates: pd.DataFrame,
+                                remaining_salary: int,
+                                current_salary: int) -> List[str]:
+        """
+        Optimize lineup to use more salary cap
+        
+        Tries to upgrade lower-salary players to higher-salary players
+        to maximize cap usage while maintaining lineup quality.
+        
+        Args:
+            selected_flex: Currently selected flex players
+            flex_candidates: All available flex candidates
+            remaining_salary: Total remaining salary after captain
+            current_salary: Current salary used by flex players
+        
+        Returns:
+            Optimized list of flex player names
+        """
+        if len(selected_flex) < ROSTER_SIZE - 1:
+            # Lineup incomplete - don't optimize yet
+            return selected_flex
+        
+        salary_left = remaining_salary - current_salary
+        min_acceptable_remaining = 1000  # Should use 98% of cap
+        
+        # If we're already using enough salary, return
+        if salary_left < min_acceptable_remaining:
+            return selected_flex
+        
+        # Get current players' data
+        selected_names = set(selected_flex)
+        selected_players = flex_candidates[
+            flex_candidates['name'].isin(selected_names)
+        ]
+        
+        # Try to upgrade players (replace cheaper with more expensive)
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            if salary_left < min_acceptable_remaining:
+                break
+            
+            # Find cheapest player in lineup
+            cheapest = selected_players.nsmallest(1, 'salary').iloc[0]
+            cheapest_salary = cheapest['salary']
+            cheapest_name = cheapest['name']
+            
+            # Find upgrade candidates (better players we can afford)
+            upgrade_budget = cheapest_salary + salary_left
+            
+            upgrade_candidates = flex_candidates[
+                (~flex_candidates['name'].isin(selected_names)) &
+                (flex_candidates['salary'] > cheapest_salary) &
+                (flex_candidates['salary'] <= upgrade_budget)
+            ]
+            
+            if len(upgrade_candidates) == 0:
+                break
+            
+            # Pick best upgrade by adjusted score
+            upgrade = upgrade_candidates.nlargest(1, 'adjusted_score').iloc[0]
+            
+            # Make the swap
+            selected_flex.remove(cheapest_name)
+            selected_flex.append(upgrade['name'])
+            
+            # Update tracking
+            salary_diff = upgrade['salary'] - cheapest_salary
+            current_salary += salary_diff
+            salary_left -= salary_diff
+            
+            selected_names.remove(cheapest_name)
+            selected_names.add(upgrade['name'])
+            
+            # Update selected_players DataFrame
+            selected_players = flex_candidates[
+                flex_candidates['name'].isin(selected_names)
+            ]
+        
+        return selected_flex
+    
     def _stochastic_flex_selection(self,
                                    flex_candidates: pd.DataFrame,
                                    remaining_salary: int,
@@ -447,6 +537,15 @@ class LineupOptimizer:
             
             # Remove selected player from pool
             available = available[available['name'] != selected_player['name']]
+        
+        # CRITICAL FIX: Optimize salary usage
+        if len(selected_flex) == ROSTER_SIZE - 1:
+            selected_flex = self._optimize_lineup_salary(
+                selected_flex,
+                flex_candidates,
+                remaining_salary,
+                current_salary
+            )
         
         return selected_flex
     
@@ -507,6 +606,15 @@ class LineupOptimizer:
             current_salary += selected_player['salary']
             
             available = available[available['name'] != selected_player['name']]
+        
+        # CRITICAL FIX: Optimize salary usage
+        if len(selected_flex) == ROSTER_SIZE - 1:
+            selected_flex = self._optimize_lineup_salary(
+                selected_flex,
+                flex_candidates,
+                remaining_salary,
+                current_salary
+            )
         
         return selected_flex
     
