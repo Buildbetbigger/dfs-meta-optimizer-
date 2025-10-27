@@ -495,6 +495,7 @@ Provide scores and brief explanations for each dimension in ONLY valid JSON form
         
         for idx, player in players_df.iterrows():
             player_dict = player.to_dict()
+            player_name = str(player_dict.get('name', 'Unknown'))
             
             # Add player-specific context
             player_context = context.copy()
@@ -507,10 +508,10 @@ Provide scores and brief explanations for each dimension in ONLY valid JSON form
                 updated_df.at[idx, 'ai_confidence'] = prediction['confidence']
                 updated_df.at[idx, 'ai_reasoning'] = prediction['reasoning']
                 
-                print(f"  ✓ {player['name']}: {prediction['ownership']:.1f}% (confidence: {prediction['confidence']}%)")
+                print(f"  ✓ {player_name}: {prediction['ownership']:.1f}% (confidence: {prediction['confidence']}%)")
                 
             except Exception as e:
-                print(f"  ⚠️ {player['name']}: Failed - {str(e)}")
+                print(f"  ⚠️ {player_name}: Failed - {str(e)}")
                 # Keep original values on error
                 continue
         
