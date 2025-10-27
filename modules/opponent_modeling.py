@@ -11,7 +11,7 @@ This module implements the core opponent modeling logic:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from config.settings import (
     HIGH_OWNERSHIP_THRESHOLD,
     LOW_OWNERSHIP_THRESHOLD,
@@ -33,7 +33,58 @@ class OpponentModel:
             players_df: DataFrame with player data
         """
         self.players_df = players_df.copy()
+        
+        # CRITICAL FIX: Clean all player names on initialization
+        self.players_df['name'] = (
+            self.players_df['name']
+            .astype(str)
+            .str.strip()
+            .str.replace(r'\s+', ' ', regex=True)
+        )
+        
         self._calculate_all_metrics()
+    
+    def _get_player_data_safe(self, player_name: str) -> Optional[pd.Series]:
+        """
+        Safely retrieve player data with robust name matching
+        
+        Args:
+            player_name: Player name to look up
+            
+        Returns:
+            Player data as Series, or None if not found
+        """
+        from typing import Optional
+        
+        # Clean the search name
+        clean_name = str(player_name).strip()
+        
+        # Try exact match first
+        matches = self.players_df[self.players_df['name'] == clean_name]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Try with additional cleaning
+        matches = self.players_df[
+            self.players_df['name'].str.strip() == clean_name
+        ]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Try case-insensitive match
+        matches = self.players_df[
+            self.players_df['name'].str.lower() == clean_name.lower()
+        ]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Player not found
+        print(f"WARNING: Player '{player_name}' not found in opponent model DataFrame!")
+        print(f"Available names: {self.players_df['name'].tolist()[:10]}...")
+        return None
     
     def _calculate_all_metrics(self):
         """Calculate all opponent modeling metrics"""
@@ -201,13 +252,48 @@ class OpponentModel:
         Returns:
             Dictionary of lineup metrics
         """
+        # CRITICAL FIX: Clean captain name before lookup
+        captain = str(captain).strip()
+        
+        # CRITICAL FIX: Use safe lookup for captain
+        captain_data = self._get_player_data_safe(captain)
+        
+        if captain_data is None:
+            # Captain not found - return default metrics
+            print(f"ERROR: Captain '{captain}' not found in opponent model!")
+            return {
+                'total_projection': 0.0,
+                'total_ceiling': 0.0,
+                'total_floor': 0.0,
+                'avg_ownership': 15.0,
+                'uniqueness': 85.0,
+                'lineup_leverage': 0.0,
+                'chalk_count': 0,
+                'contrarian_count': 0,
+                'total_salary': 50000,
+                'salary_remaining': 0
+            }
+        
+        # Filter lineup players - clean names first
+        clean_lineup = [str(p).strip() for p in lineup]
         lineup_players = self.players_df[
-            self.players_df['name'].isin(lineup)
+            self.players_df['name'].isin(clean_lineup)
         ]
         
-        captain_data = self.players_df[
-            self.players_df['name'] == captain
-        ].iloc[0]
+        if len(lineup_players) == 0:
+            print(f"ERROR: No players found in lineup: {lineup}")
+            return {
+                'total_projection': 0.0,
+                'total_ceiling': 0.0,
+                'total_floor': 0.0,
+                'avg_ownership': 15.0,
+                'uniqueness': 85.0,
+                'lineup_leverage': 0.0,
+                'chalk_count': 0,
+                'contrarian_count': 0,
+                'total_salary': 50000,
+                'salary_remaining': 0
+            }
         
         # Calculate total projection
         captain_points = captain_data['projection'] * CAPTAIN_MULTIPLIER
