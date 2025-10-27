@@ -105,22 +105,42 @@ class LineupOptimizer:
         self.generated_lineups = []
         self.player_usage = {name: 0 for name in self.players_df['name']}
         
+        # CRITICAL FIX: Track generated lineups to prevent duplicates
+        seen_lineups = set()
+        
         mode_config = OPTIMIZATION_MODES.get(mode, OPTIMIZATION_MODES['balanced'])
         
+        attempts = 0
+        max_attempts = num_lineups * 10  # Allow retries for duplicate prevention
+        
         for i in range(num_lineups):
-            lineup = self._generate_single_lineup(
-                mode_config=mode_config,
-                max_exposure=max_exposure,
-                iteration=i,
-                total_lineups=num_lineups
-            )
-            
-            if lineup:
+            while attempts < max_attempts:
+                attempts += 1
+                
+                lineup = self._generate_single_lineup(
+                    mode_config=mode_config,
+                    max_exposure=max_exposure,
+                    iteration=i,
+                    total_lineups=num_lineups
+                )
+                
+                if not lineup:
+                    continue
+                
+                # CRITICAL FIX: Check for duplicates
+                lineup_signature = self._get_lineup_signature(lineup)
+                
+                if lineup_signature in seen_lineups:
+                    # Duplicate detected - try again
+                    continue
+                
                 # CRITICAL FIX: Clean player names in lineup before storing
                 lineup['captain'] = str(lineup['captain']).strip()
                 lineup['flex'] = [str(p).strip() for p in lineup['flex']]
                 lineup['players'] = [str(p).strip() for p in lineup['players']]
                 
+                # New unique lineup found!
+                seen_lineups.add(lineup_signature)
                 self.generated_lineups.append(lineup)
                 
                 # Update usage tracking
@@ -128,8 +148,24 @@ class LineupOptimizer:
                     clean_player = str(player).strip()
                     if clean_player in self.player_usage:
                         self.player_usage[clean_player] += 1
+                
+                break  # Success - move to next lineup
         
         return self.generated_lineups
+    
+    def _get_lineup_signature(self, lineup: Dict) -> str:
+        """
+        Create a unique signature for a lineup to detect duplicates
+        
+        Args:
+            lineup: Lineup dictionary
+            
+        Returns:
+            String signature of the lineup
+        """
+        # Sort all players (captain + flex) to create consistent signature
+        all_players = sorted([lineup['captain']] + lineup['flex'])
+        return '|'.join(all_players)
     
     def _generate_single_lineup(self,
                                mode_config: Dict,
@@ -148,8 +184,8 @@ class LineupOptimizer:
         Returns:
             Lineup dictionary or None if generation failed
         """
-        # Calculate player scores based on mode
-        player_scores = self._calculate_player_scores(mode_config)
+        # Calculate player scores based on mode (with progressive randomization)
+        player_scores = self._calculate_player_scores(mode_config, iteration, total_lineups)
         
         # Apply exposure limits
         max_usage = int(total_lineups * max_exposure)
@@ -169,16 +205,17 @@ class LineupOptimizer:
             how='left'
         )
         
-        # Select captain using strategic scoring
-        captain = self._select_captain(available_players, mode_config)
+        # Select captain using strategic scoring (probabilistic)
+        captain = self._select_captain(available_players, mode_config, iteration)
         if captain is None:
             return None
         
-        # Select flex players
+        # Select flex players (stochastic selection)
         flex_players = self._select_flex_players(
             available_players,
             captain,
-            mode_config
+            mode_config,
+            iteration
         )
         
         if len(flex_players) < ROSTER_SIZE - 1:
@@ -202,12 +239,14 @@ class LineupOptimizer:
             'mode': mode_config['description']
         }
     
-    def _calculate_player_scores(self, mode_config: Dict) -> pd.DataFrame:
+    def _calculate_player_scores(self, mode_config: Dict, iteration: int = 0, total_lineups: int = 1) -> pd.DataFrame:
         """
         Calculate player scores based on optimization mode
         
         Args:
             mode_config: Mode configuration dictionary
+            iteration: Current iteration number (for progressive randomization)
+            total_lineups: Total lineups being generated
         
         Returns:
             DataFrame with player names and scores
@@ -233,11 +272,25 @@ class LineupOptimizer:
         # Apply chalk penalty if in contrarian mode
         if mode_config.get('prioritize_contrarian', False):
             chalk_penalty = self.players_df['ownership'] / 100
-            base_score = base_score * (1 - chalk_penalty * 0.3)
+            base_score = base_score * (1 - chalk_penalty * 0.5)  # Increased from 0.3 to 0.5
         
-        # Add small random factor for diversity
-        random_factor = np.random.uniform(0.95, 1.05, len(self.players_df))
+        # CRITICAL FIX: Much stronger randomization for lineup diversity
+        # Progressive randomization: more lineups = more variance needed
+        progress_factor = min(iteration / max(total_lineups * 0.5, 1), 1.0)
+        
+        # Start with 15-25% variance, increase to 30-50% variance as we generate more
+        min_factor = 0.85 - (progress_factor * 0.15)  # 0.85 -> 0.70
+        max_factor = 1.15 + (progress_factor * 0.35)  # 1.15 -> 1.50
+        
+        random_factor = np.random.uniform(min_factor, max_factor, len(self.players_df))
         final_score = base_score * random_factor
+        
+        # Add usage-based penalty to promote diversity
+        for idx, player_name in enumerate(self.players_df['name']):
+            usage_count = self.player_usage.get(player_name, 0)
+            if usage_count > 0 and total_lineups > 1:
+                usage_penalty = 1.0 - (usage_count / total_lineups) * 0.3
+                final_score.iloc[idx] *= usage_penalty
         
         return pd.DataFrame({
             'name': self.players_df['name'],
@@ -246,22 +299,41 @@ class LineupOptimizer:
     
     def _select_captain(self,
                        available_players: pd.DataFrame,
-                       mode_config: Dict) -> Optional[str]:
+                       mode_config: Dict,
+                       iteration: int = 0) -> Optional[str]:
         """
-        Select the optimal captain
+        Select the optimal captain using probabilistic selection
         
         Args:
             available_players: DataFrame of available players with scores
             mode_config: Mode configuration
+            iteration: Current iteration for randomization
         
         Returns:
             Captain player name or None
         """
-        # Sort by optimizer score
-        captain_candidates = available_players.nlargest(8, 'optimizer_score')
+        # CRITICAL FIX: Probabilistic selection instead of deterministic
+        # Get more candidates for better diversity
+        num_candidates = min(15, len(available_players))
+        captain_candidates = available_players.nlargest(num_candidates, 'optimizer_score')
         
-        # Check if we can afford any captain with 5 flex spots
-        for _, player in captain_candidates.iterrows():
+        # Calculate selection probabilities based on scores (not uniform!)
+        scores = captain_candidates['optimizer_score'].values
+        # Softmax-like probabilities with temperature
+        temperature = 1.5 + (iteration * 0.05)  # Increase randomness over iterations
+        exp_scores = np.exp(scores / temperature)
+        probabilities = exp_scores / exp_scores.sum()
+        
+        # Try candidates in random order weighted by probability
+        candidate_indices = np.random.choice(
+            len(captain_candidates),
+            size=min(num_candidates, 10),
+            replace=False,
+            p=probabilities
+        )
+        
+        for idx in candidate_indices:
+            player = captain_candidates.iloc[idx]
             captain_salary = player['salary'] * CAPTAIN_MULTIPLIER
             remaining = SALARY_CAP - captain_salary
             
@@ -278,14 +350,16 @@ class LineupOptimizer:
     def _select_flex_players(self,
                             available_players: pd.DataFrame,
                             captain: str,
-                            mode_config: Dict) -> List[str]:
+                            mode_config: Dict,
+                            iteration: int = 0) -> List[str]:
         """
-        Select optimal flex players given a captain
+        Select optimal flex players using stochastic selection
         
         Args:
             available_players: DataFrame of available players
             captain: Selected captain name
             mode_config: Mode configuration
+            iteration: Current iteration for randomization
         
         Returns:
             List of flex player names
@@ -302,32 +376,137 @@ class LineupOptimizer:
             available_players['name'] != captain
         ].copy()
         
-        # Sort by optimizer score
-        flex_candidates = flex_candidates.sort_values(
-            'optimizer_score',
-            ascending=False
-        )
+        # Apply team correlation bonus
+        flex_candidates['adjusted_score'] = flex_candidates['optimizer_score']
+        same_team_mask = flex_candidates['team'] == captain_data['team']
+        flex_candidates.loc[same_team_mask, 'adjusted_score'] *= 1.15
         
-        # Greedy selection with correlation bonus
+        # CRITICAL FIX: Stochastic selection instead of pure greedy
+        # Use multiple selection strategies based on iteration
+        
+        if iteration % 3 == 0:
+            # Strategy 1: Probabilistic weighted selection
+            selected_flex = self._stochastic_flex_selection(
+                flex_candidates, remaining_salary, temperature=1.2
+            )
+        elif iteration % 3 == 1:
+            # Strategy 2: High variance selection
+            selected_flex = self._stochastic_flex_selection(
+                flex_candidates, remaining_salary, temperature=2.0
+            )
+        else:
+            # Strategy 3: Mixed strategy (some top, some random)
+            selected_flex = self._mixed_flex_selection(
+                flex_candidates, remaining_salary
+            )
+        
+        return selected_flex
+    
+    def _stochastic_flex_selection(self,
+                                   flex_candidates: pd.DataFrame,
+                                   remaining_salary: int,
+                                   temperature: float = 1.5) -> List[str]:
+        """
+        Probabilistic flex player selection
+        
+        Args:
+            flex_candidates: Available flex players
+            remaining_salary: Remaining salary cap
+            temperature: Controls randomness (higher = more random)
+        
+        Returns:
+            List of selected flex player names
+        """
+        selected_flex = []
+        current_salary = 0
+        available = flex_candidates.copy()
+        
+        for _ in range(ROSTER_SIZE - 1):
+            if len(available) == 0:
+                break
+            
+            # Filter by salary constraint
+            affordable = available[
+                available['salary'] <= (remaining_salary - current_salary)
+            ]
+            
+            if len(affordable) == 0:
+                break
+            
+            # Calculate selection probabilities
+            scores = affordable['adjusted_score'].values
+            exp_scores = np.exp(scores / temperature)
+            probabilities = exp_scores / exp_scores.sum()
+            
+            # Select one player probabilistically
+            selected_idx = np.random.choice(len(affordable), p=probabilities)
+            selected_player = affordable.iloc[selected_idx]
+            
+            selected_flex.append(selected_player['name'])
+            current_salary += selected_player['salary']
+            
+            # Remove selected player from pool
+            available = available[available['name'] != selected_player['name']]
+        
+        return selected_flex
+    
+    def _mixed_flex_selection(self,
+                             flex_candidates: pd.DataFrame,
+                             remaining_salary: int) -> List[str]:
+        """
+        Mixed strategy: take some top players, some random
+        
+        Args:
+            flex_candidates: Available flex players
+            remaining_salary: Remaining salary cap
+        
+        Returns:
+            List of selected flex player names
+        """
         selected_flex = []
         current_salary = 0
         
-        for _, player in flex_candidates.iterrows():
-            if len(selected_flex) >= ROSTER_SIZE - 1:
+        # Sort by score
+        sorted_candidates = flex_candidates.sort_values(
+            'adjusted_score',
+            ascending=False
+        )
+        
+        # Take 2-3 top players
+        num_top = np.random.randint(2, 4)
+        
+        for _, player in sorted_candidates.iterrows():
+            if len(selected_flex) >= num_top:
                 break
             
-            player_salary = player['salary']
-            
-            # Check salary constraint
-            if current_salary + player_salary <= remaining_salary:
-                # Apply correlation bonus if same team as captain
-                score = player['optimizer_score']
-                
-                if player['team'] == captain_data['team']:
-                    score *= 1.15  # Correlation bonus
-                
+            if current_salary + player['salary'] <= remaining_salary:
                 selected_flex.append(player['name'])
-                current_salary += player_salary
+                current_salary += player['salary']
+        
+        # Fill rest with weighted random selection
+        available = flex_candidates[
+            ~flex_candidates['name'].isin(selected_flex)
+        ]
+        
+        while len(selected_flex) < ROSTER_SIZE - 1 and len(available) > 0:
+            affordable = available[
+                available['salary'] <= (remaining_salary - current_salary)
+            ]
+            
+            if len(affordable) == 0:
+                break
+            
+            # Weighted random selection
+            scores = affordable['adjusted_score'].values
+            probabilities = scores / scores.sum()
+            
+            selected_idx = np.random.choice(len(affordable), p=probabilities)
+            selected_player = affordable.iloc[selected_idx]
+            
+            selected_flex.append(selected_player['name'])
+            current_salary += selected_player['salary']
+            
+            available = available[available['name'] != selected_player['name']]
         
         return selected_flex
     
@@ -435,7 +614,7 @@ class LineupOptimizer:
             'prioritize_contrarian': False
         }
         
-        traditional_scores = self._calculate_player_scores(traditional_config)
+        traditional_scores = self._calculate_player_scores(traditional_config, 0, 1)
         traditional_players = self.players_df.merge(
             traditional_scores,
             on='name'
