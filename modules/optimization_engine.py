@@ -111,10 +111,19 @@ class LineupOptimizer:
         mode_config = OPTIMIZATION_MODES.get(mode, OPTIMIZATION_MODES['balanced'])
         
         attempts = 0
-        max_attempts = num_lineups * 10  # Allow retries for duplicate prevention
+        max_attempts = num_lineups * 15  # Allow more retries for salary validation
+        
+        rejected_salary_count = 0
+        rejected_duplicate_count = 0
+        
+        print(f"\n🎯 Generating {num_lineups} lineups in {mode} mode...")
+        print(f"   Salary cap: ${SALARY_CAP:,}")
+        print(f"   Required usage: 96%+ (${SALARY_CAP * 0.96:,.0f}+)")
         
         for i in range(num_lineups):
-            while attempts < max_attempts:
+            lineup_found = False
+            
+            while attempts < max_attempts and not lineup_found:
                 attempts += 1
                 
                 lineup = self._generate_single_lineup(
@@ -125,6 +134,7 @@ class LineupOptimizer:
                 )
                 
                 if not lineup:
+                    rejected_salary_count += 1
                     continue
                 
                 # CRITICAL FIX: Check for duplicates
@@ -132,6 +142,7 @@ class LineupOptimizer:
                 
                 if lineup_signature in seen_lineups:
                     # Duplicate detected - try again
+                    rejected_duplicate_count += 1
                     continue
                 
                 # CRITICAL FIX: Clean player names in lineup before storing
@@ -149,7 +160,17 @@ class LineupOptimizer:
                     if clean_player in self.player_usage:
                         self.player_usage[clean_player] += 1
                 
-                break  # Success - move to next lineup
+                lineup_found = True
+                
+                # Progress indicator
+                if (i + 1) % 5 == 0:
+                    print(f"   ✓ Generated {i + 1}/{num_lineups} lineups (attempts: {attempts})")
+        
+        print(f"\n✅ Generation complete!")
+        print(f"   Total attempts: {attempts}")
+        print(f"   Rejected (low salary): {rejected_salary_count}")
+        print(f"   Rejected (duplicates): {rejected_duplicate_count}")
+        print(f"   Success rate: {(num_lineups/attempts)*100:.1f}%")
         
         return self.generated_lineups
     
@@ -179,10 +200,10 @@ class LineupOptimizer:
             mode_config: Configuration for optimization mode
             max_exposure: Maximum exposure per player
             iteration: Current iteration number
-            total_lineups: Total number of lineups to generate
+            total_lineups: Total number of lineups being generated
         
         Returns:
-            Lineup dictionary or None if generation failed
+            Dictionary with lineup data or None if generation failed
         """
         # Calculate player scores based on mode (with progressive randomization)
         player_scores = self._calculate_player_scores(mode_config, iteration, total_lineups)
@@ -230,12 +251,17 @@ class LineupOptimizer:
             captain
         )
         
-        # CRITICAL FIX: Validate salary usage (should use 98%+ of cap)
+        # CRITICAL FIX: Validate salary usage (should use 96%+ of cap)
         salary_used = metrics['total_salary']
         salary_used_pct = (salary_used / SALARY_CAP) * 100
         
-        if salary_used_pct < 96.0:  # Reject if using less than 96% ($48,000)
-            # This lineup doesn't use enough salary - reject it
+        # DEBUG: Print salary info for troubleshooting
+        if salary_used_pct < 96.0:
+            if iteration < 3:  # Only print first 3 rejections to avoid spam
+                print(f"\n   ⚠️  Lineup {iteration + 1} REJECTED:")
+                print(f"       Captain: {captain}")
+                print(f"       Salary: ${salary_used:,} ({salary_used_pct:.1f}%)")
+                print(f"       Need: ${SALARY_CAP * 0.96:,.0f}+ (96%+)")
             return None
         
         return {
@@ -447,6 +473,10 @@ class LineupOptimizer:
             flex_candidates['name'].isin(selected_names)
         ]
         
+        if len(selected_players) == 0:
+            # Couldn't find players - return original
+            return selected_flex
+        
         # Try to upgrade players (replace cheaper with more expensive)
         max_attempts = 10
         for attempt in range(max_attempts):
@@ -478,7 +508,7 @@ class LineupOptimizer:
             selected_flex.append(upgrade['name'])
             
             # Update tracking
-            salary_diff = upgrade['salary'] - cheapest_salary
+            salary_diff = upgrade['salary'] - cheapest['salary']
             current_salary += salary_diff
             salary_left -= salary_diff
             
@@ -620,7 +650,7 @@ class LineupOptimizer:
     
     def get_portfolio_analysis(self) -> Dict:
         """
-        Analyze the complete portfolio of generated lineups
+        Analyze the generated lineup portfolio
         
         Returns:
             Dictionary with portfolio statistics
@@ -628,93 +658,95 @@ class LineupOptimizer:
         if not self.generated_lineups:
             return {}
         
-        # Calculate aggregate metrics
-        all_projections = [lu['metrics']['total_projection'] 
-                          for lu in self.generated_lineups]
-        all_ceilings = [lu['metrics']['total_ceiling'] 
-                       for lu in self.generated_lineups]
-        all_ownership = [lu['metrics']['avg_ownership'] 
-                        for lu in self.generated_lineups]
-        all_uniqueness = [lu['metrics']['uniqueness'] 
-                         for lu in self.generated_lineups]
+        analysis = {
+            'total_lineups': len(self.generated_lineups),
+            'player_exposure': {},
+            'salary_stats': {},
+            'projection_stats': {},
+            'ownership_stats': {}
+        }
         
-        # Player exposure analysis
-        total_lineups = len(self.generated_lineups)
-        exposure_data = []
-        
-        for player_name, usage_count in self.player_usage.items():
-            if usage_count > 0:
-                exposure_pct = (usage_count / total_lineups) * 100
+        # Calculate player exposure
+        for player_name, usage in self.player_usage.items():
+            if usage > 0:
+                exposure_pct = (usage / len(self.generated_lineups)) * 100
                 
-                # CRITICAL FIX: Use safe player lookup
+                # CRITICAL FIX: Safe player lookup
                 player_data = self._get_player_data_safe(player_name)
                 
                 if player_data is not None:
-                    exposure_data.append({
-                        'name': player_name,
-                        'usage_count': usage_count,
-                        'exposure_pct': exposure_pct,
-                        'ownership': player_data['ownership'],
-                        'leverage': player_data['leverage']
-                    })
-                else:
-                    # Player not found - use placeholder data
-                    print(f"WARNING: Skipping exposure data for '{player_name}' - not found in DataFrame")
-                    exposure_data.append({
-                        'name': player_name,
-                        'usage_count': usage_count,
-                        'exposure_pct': exposure_pct,
-                        'ownership': 15.0,  # Default
-                        'leverage': 100.0   # Default
-                    })
+                    analysis['player_exposure'][player_name] = {
+                        'count': usage,
+                        'exposure': exposure_pct,
+                        'salary': player_data['salary'],
+                        'projection': player_data['projection']
+                    }
         
-        # Handle empty exposure_data
-        if not exposure_data:
-            return {
-                'total_lineups': total_lineups,
-                'avg_projection': np.mean(all_projections) if all_projections else 0,
-                'avg_ceiling': np.mean(all_ceilings) if all_ceilings else 0,
-                'avg_ownership': np.mean(all_ownership) if all_ownership else 0,
-                'avg_uniqueness': np.mean(all_uniqueness) if all_uniqueness else 0,
-                'projection_range': (min(all_projections), max(all_projections)) if all_projections else (0, 0),
-                'ceiling_range': (min(all_ceilings), max(all_ceilings)) if all_ceilings else (0, 0),
-                'ownership_range': (min(all_ownership), max(all_ownership)) if all_ownership else (0, 0),
-                'player_exposure': pd.DataFrame(),
-                'unique_players_used': 0,
-                'most_exposed': [],
-                'least_exposed': []
-            }
-        
-        exposure_df = pd.DataFrame(exposure_data).sort_values(
-            'exposure_pct',
-            ascending=False
-        )
-        
-        return {
-            'total_lineups': total_lineups,
-            'avg_projection': np.mean(all_projections),
-            'avg_ceiling': np.mean(all_ceilings),
-            'avg_ownership': np.mean(all_ownership),
-            'avg_uniqueness': np.mean(all_uniqueness),
-            'projection_range': (min(all_projections), max(all_projections)),
-            'ceiling_range': (min(all_ceilings), max(all_ceilings)),
-            'ownership_range': (min(all_ownership), max(all_ownership)),
-            'player_exposure': exposure_df,
-            'unique_players_used': len(exposure_df),
-            'most_exposed': exposure_df.head(5).to_dict('records') if len(exposure_df) >= 5 else exposure_df.to_dict('records'),
-            'least_exposed': exposure_df.tail(5).to_dict('records') if len(exposure_df) >= 5 else exposure_df.to_dict('records')
+        # Salary statistics
+        salaries = [lu['metrics']['total_salary'] for lu in self.generated_lineups]
+        analysis['salary_stats'] = {
+            'min': min(salaries),
+            'max': max(salaries),
+            'avg': sum(salaries) / len(salaries),
+            'avg_remaining': SALARY_CAP - (sum(salaries) / len(salaries))
         }
+        
+        # Projection statistics
+        projections = [lu['metrics']['total_projection'] for lu in self.generated_lineups]
+        analysis['projection_stats'] = {
+            'min': min(projections),
+            'max': max(projections),
+            'avg': sum(projections) / len(projections)
+        }
+        
+        # Ownership statistics
+        ownerships = [lu['metrics']['avg_ownership'] for lu in self.generated_lineups]
+        analysis['ownership_stats'] = {
+            'min': min(ownerships),
+            'max': max(ownerships),
+            'avg': sum(ownerships) / len(ownerships)
+        }
+        
+        return analysis
+    
+    def export_to_csv(self, filename: str = 'lineups.csv'):
+        """
+        Export lineups to CSV format for DFS sites
+        
+        Args:
+            filename: Output filename
+        """
+        if not self.generated_lineups:
+            print("No lineups to export!")
+            return
+        
+        export_data = []
+        
+        for lineup in self.generated_lineups:
+            row = {
+                'CPT': lineup['captain'],
+                'FLEX1': lineup['flex'][0] if len(lineup['flex']) > 0 else '',
+                'FLEX2': lineup['flex'][1] if len(lineup['flex']) > 1 else '',
+                'FLEX3': lineup['flex'][2] if len(lineup['flex']) > 2 else '',
+                'FLEX4': lineup['flex'][3] if len(lineup['flex']) > 3 else '',
+                'FLEX5': lineup['flex'][4] if len(lineup['flex']) > 4 else '',
+                'Salary': lineup['metrics']['total_salary'],
+                'Projection': lineup['metrics']['total_projection'],
+                'Ownership': lineup['metrics']['avg_ownership']
+            }
+            export_data.append(row)
+        
+        df = pd.DataFrame(export_data)
+        df.to_csv(filename, index=False)
+        print(f"✅ Exported {len(self.generated_lineups)} lineups to {filename}")
     
     def compare_to_traditional(self) -> Dict:
         """
-        Compare opponent-modeled lineups to traditional optimization
+        Compare this optimizer's approach to traditional projection-only optimization
         
         Returns:
-            Comparison statistics
+            Dictionary with comparison metrics
         """
-        if not self.generated_lineups:
-            return {}
-        
         # Generate a "traditional" lineup (pure projection optimization)
         traditional_config = {
             'leverage_weight': 0.0,
@@ -723,65 +755,28 @@ class LineupOptimizer:
         }
         
         traditional_scores = self._calculate_player_scores(traditional_config, 0, 1)
-        traditional_players = self.players_df.merge(
-            traditional_scores,
-            on='name'
-        ).nlargest(10, 'optimizer_score')
         
-        # Compare metrics
-        our_avg_ownership = np.mean([
-            lu['metrics']['avg_ownership'] 
-            for lu in self.generated_lineups
-        ])
+        # Calculate average leverage and ownership for our lineups vs traditional
+        if not self.generated_lineups:
+            return {}
         
-        our_avg_projection = np.mean([
-            lu['metrics']['total_projection'] 
-            for lu in self.generated_lineups
-        ])
+        our_avg_ownership = sum(
+            lu['metrics']['avg_ownership'] for lu in self.generated_lineups
+        ) / len(self.generated_lineups)
         
-        traditional_avg_ownership = traditional_players['ownership'].mean()
+        our_avg_leverage = sum(
+            lu['metrics']['lineup_leverage'] for lu in self.generated_lineups
+        ) / len(self.generated_lineups)
         
         return {
-            'our_avg_ownership': our_avg_ownership,
-            'traditional_avg_ownership': traditional_avg_ownership,
-            'ownership_difference': our_avg_ownership - traditional_avg_ownership,
-            'our_avg_projection': our_avg_projection,
-            'differentiation_score': abs(our_avg_ownership - traditional_avg_ownership),
-            'uniqueness_advantage': 100 - our_avg_ownership
-        }
-    
-    def export_lineups(self, filename: str = 'lineups.csv'):
-        """
-        Export lineups to CSV for DraftKings upload
-        
-        Args:
-            filename: Output filename
-        """
-        if not self.generated_lineups:
-            return
-        
-        export_data = []
-        
-        for lineup in self.generated_lineups:
-            row = {
-                'Lineup': lineup['lineup_id'],
-                'CPT': lineup['captain'],
+            'our_approach': {
+                'avg_ownership': our_avg_ownership,
+                'avg_leverage': our_avg_leverage,
+                'strategy': 'Opponent modeling + leverage optimization'
+            },
+            'traditional_approach': {
+                'strategy': 'Pure projection maximization',
+                'typical_ownership': 'Higher (follows chalk)',
+                'typical_leverage': 'Lower (ignores ownership)'
             }
-            
-            # Add flex spots
-            for i, flex_player in enumerate(lineup['flex'], 1):
-                row[f'FLEX{i}'] = flex_player
-            
-            # Add metrics
-            row['Total_Salary'] = int(lineup['metrics']['total_salary'])
-            row['Projected'] = round(lineup['metrics']['total_projection'], 2)
-            row['Ceiling'] = round(lineup['metrics']['total_ceiling'], 2)
-            row['Ownership'] = round(lineup['metrics']['avg_ownership'], 2)
-            row['Uniqueness'] = round(lineup['metrics']['uniqueness'], 2)
-            
-            export_data.append(row)
-        
-        export_df = pd.DataFrame(export_data)
-        export_df.to_csv(filename, index=False)
-        
-        return filename
+        }
