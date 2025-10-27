@@ -688,7 +688,10 @@ def display_lineups():
         with col1:
             st.metric("Total Lineups", portfolio['total_lineups'])
         with col2:
-            st.metric("Avg Projection", f"{portfolio['avg_projection']:.1f}")
+            if portfolio and 'projection_stats' in portfolio:
+                st.metric("Avg Projection", f"{portfolio['projection_stats']['avg']:.1f}")
+            else:
+                st.warning("No lineups generated successfully")
         with col3:
             st.metric("Avg Ceiling", f"{portfolio['avg_ceiling']:.1f}")
         with col4:
