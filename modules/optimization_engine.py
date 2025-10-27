@@ -32,9 +32,58 @@ class LineupOptimizer:
             opponent_model: OpponentModel instance
         """
         self.players_df = players_df.copy()
+        
+        # CRITICAL FIX: Clean all player names on initialization
+        self.players_df['name'] = (
+            self.players_df['name']
+            .astype(str)
+            .str.strip()
+            .str.replace(r'\s+', ' ', regex=True)
+        )
+        
         self.opponent_model = opponent_model
         self.generated_lineups = []
-        self.player_usage = {name: 0 for name in players_df['name']}
+        self.player_usage = {name: 0 for name in self.players_df['name']}
+    
+    def _get_player_data_safe(self, player_name: str) -> Optional[pd.Series]:
+        """
+        Safely retrieve player data with robust name matching
+        
+        Args:
+            player_name: Player name to look up
+            
+        Returns:
+            Player data as Series, or None if not found
+        """
+        # Clean the search name
+        clean_name = str(player_name).strip()
+        
+        # Try exact match first
+        matches = self.players_df[self.players_df['name'] == clean_name]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Try with additional cleaning
+        matches = self.players_df[
+            self.players_df['name'].str.strip() == clean_name
+        ]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Try case-insensitive match
+        matches = self.players_df[
+            self.players_df['name'].str.lower() == clean_name.lower()
+        ]
+        
+        if len(matches) > 0:
+            return matches.iloc[0]
+        
+        # Player not found
+        print(f"WARNING: Player '{player_name}' not found in DataFrame!")
+        print(f"Available names: {self.players_df['name'].tolist()[:10]}...")
+        return None
     
     def generate_lineups(self,
                         num_lineups: int,
@@ -67,10 +116,18 @@ class LineupOptimizer:
             )
             
             if lineup:
+                # CRITICAL FIX: Clean player names in lineup before storing
+                lineup['captain'] = str(lineup['captain']).strip()
+                lineup['flex'] = [str(p).strip() for p in lineup['flex']]
+                lineup['players'] = [str(p).strip() for p in lineup['players']]
+                
                 self.generated_lineups.append(lineup)
+                
                 # Update usage tracking
                 for player in lineup['players']:
-                    self.player_usage[player] += 1
+                    clean_player = str(player).strip()
+                    if clean_player in self.player_usage:
+                        self.player_usage[clean_player] += 1
         
         return self.generated_lineups
     
@@ -98,7 +155,7 @@ class LineupOptimizer:
         max_usage = int(total_lineups * max_exposure)
         available_players = self.players_df[
             self.players_df['name'].apply(
-                lambda x: self.player_usage[x] < max_usage
+                lambda x: self.player_usage.get(str(x).strip(), 0) < max_usage
             )
         ].copy()
         
@@ -301,17 +358,45 @@ class LineupOptimizer:
         for player_name, usage_count in self.player_usage.items():
             if usage_count > 0:
                 exposure_pct = (usage_count / total_lineups) * 100
-                player_data = self.players_df[
-                    self.players_df['name'] == player_name
-                ].iloc[0]
                 
-                exposure_data.append({
-                    'name': player_name,
-                    'usage_count': usage_count,
-                    'exposure_pct': exposure_pct,
-                    'ownership': player_data['ownership'],
-                    'leverage': player_data['leverage']
-                })
+                # CRITICAL FIX: Use safe player lookup
+                player_data = self._get_player_data_safe(player_name)
+                
+                if player_data is not None:
+                    exposure_data.append({
+                        'name': player_name,
+                        'usage_count': usage_count,
+                        'exposure_pct': exposure_pct,
+                        'ownership': player_data['ownership'],
+                        'leverage': player_data['leverage']
+                    })
+                else:
+                    # Player not found - use placeholder data
+                    print(f"WARNING: Skipping exposure data for '{player_name}' - not found in DataFrame")
+                    exposure_data.append({
+                        'name': player_name,
+                        'usage_count': usage_count,
+                        'exposure_pct': exposure_pct,
+                        'ownership': 15.0,  # Default
+                        'leverage': 100.0   # Default
+                    })
+        
+        # Handle empty exposure_data
+        if not exposure_data:
+            return {
+                'total_lineups': total_lineups,
+                'avg_projection': np.mean(all_projections) if all_projections else 0,
+                'avg_ceiling': np.mean(all_ceilings) if all_ceilings else 0,
+                'avg_ownership': np.mean(all_ownership) if all_ownership else 0,
+                'avg_uniqueness': np.mean(all_uniqueness) if all_uniqueness else 0,
+                'projection_range': (min(all_projections), max(all_projections)) if all_projections else (0, 0),
+                'ceiling_range': (min(all_ceilings), max(all_ceilings)) if all_ceilings else (0, 0),
+                'ownership_range': (min(all_ownership), max(all_ownership)) if all_ownership else (0, 0),
+                'player_exposure': pd.DataFrame(),
+                'unique_players_used': 0,
+                'most_exposed': [],
+                'least_exposed': []
+            }
         
         exposure_df = pd.DataFrame(exposure_data).sort_values(
             'exposure_pct',
@@ -329,8 +414,8 @@ class LineupOptimizer:
             'ownership_range': (min(all_ownership), max(all_ownership)),
             'player_exposure': exposure_df,
             'unique_players_used': len(exposure_df),
-            'most_exposed': exposure_df.head(5).to_dict('records'),
-            'least_exposed': exposure_df.tail(5).to_dict('records')
+            'most_exposed': exposure_df.head(5).to_dict('records') if len(exposure_df) >= 5 else exposure_df.to_dict('records'),
+            'least_exposed': exposure_df.tail(5).to_dict('records') if len(exposure_df) >= 5 else exposure_df.to_dict('records')
         }
     
     def compare_to_traditional(self) -> Dict:
