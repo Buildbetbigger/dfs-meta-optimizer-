@@ -16,8 +16,11 @@ import os
 sys.path.append(os.path.dirname(__file__))
 
 from config.settings import (
-    SALARY_CAP, ROSTER_SIZE, CAPTAIN_MULTIPLIER,
-    OPTIMIZATION_MODES, ENABLE_CLAUDE_AI
+    SALARY_CAP,
+    ROSTER_SIZE,
+    CAPTAIN_MULTIPLIER,
+    OPTIMIZATION_MODES,
+    ENABLE_CLAUDE_AI
 )
 from modules.opponent_modeling import OpponentModel
 from modules.optimization_engine import LineupOptimizer
@@ -28,7 +31,6 @@ try:
     CLAUDE_AVAILABLE = True
 except ImportError:
     CLAUDE_AVAILABLE = False
-    st.warning("⚠️ Claude AI assistant not available. Install anthropic package and set API key.")
 
 
 # Page config
@@ -54,28 +56,22 @@ def initialize_session_state():
             st.session_state.claude_assistant = ClaudeAssistant()
         except Exception as e:
             st.session_state.claude_assistant = None
-            st.warning(f"Could not initialize Claude assistant: {str(e)}")
 
 
 def load_csv_data(uploaded_file) -> Optional[pd.DataFrame]:
     """
     Load and validate CSV data with robust handling of different formats
-    
-    Handles:
-    - Standard format with 'name' column
-    - Split format with 'first_name' and 'last_name' columns
-    - DST/team entries that need filtering
     """
     try:
         df = pd.read_csv(uploaded_file)
         
-        # CRITICAL FIX: Handle first_name/last_name format
+        # Handle first_name/last_name format
         if 'first_name' in df.columns and 'last_name' in df.columns:
             st.info("✓ Detected first_name/last_name format - combining names...")
             df['name'] = df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
             df['name'] = df['name'].str.strip()
-            
-        # CRITICAL FIX: Filter out DST/team entries
+        
+        # Filter out DST/team entries
         initial_count = len(df)
         df = df[df['position'] != 'DST'].copy()
         removed_count = initial_count - len(df)
@@ -92,9 +88,9 @@ def load_csv_data(uploaded_file) -> Optional[pd.DataFrame]:
             st.error(f"Missing required columns: {missing}")
             return None
         
-        # Add ownership if not present (will be predicted by AI)
+        # Add ownership if not present
         if 'ownership' not in df.columns:
-            df['ownership'] = 15.0  # Default placeholder
+            df['ownership'] = 15.0
             st.info("✓ No ownership column - will use AI prediction or defaults")
         
         # Calculate ceiling/floor if not present
@@ -163,24 +159,41 @@ def player_input_section():
                 with col3:
                     st.metric("Avg Projection", f"{df['projection'].mean():.1f}")
                 
-                # CRITICAL: AI Ownership Prediction
+                # AI Ownership Prediction
                 if CLAUDE_AVAILABLE and st.session_state.claude_assistant:
                     if st.button("🤖 Predict Ownership with AI", type="primary"):
                         with st.spinner("🤖 AI is predicting ownership percentages..."):
                             try:
                                 # Call Claude to predict ownership
-                                updated_df = st.session_state.claude_assistant.predict_ownership(df)
+                                updated_df = st.session_state.claude_assistant.predict_ownership(df.copy())
                                 
                                 if updated_df is not None and 'ownership' in updated_df.columns:
+                                    # Ensure ownership is numeric
+                                    updated_df['ownership'] = pd.to_numeric(
+                                        updated_df['ownership'], 
+                                        errors='coerce'
+                                    ).fillna(15.0)
+                                    
                                     st.session_state.players_df = updated_df
                                     st.success("✅ AI ownership prediction complete!")
                                     
                                     # Show ownership distribution
                                     st.subheader("Predicted Ownership Distribution")
-                                    ownership_summary = updated_df.nlargest(10, 'ownership')[
-                                        ['name', 'position', 'salary', 'projection', 'ownership']
-                                    ]
-                                    st.dataframe(ownership_summary, use_container_width=True)
+                                    
+                                    # Create summary with explicit formatting
+                                    top_owned = updated_df.nlargest(10, 'ownership').copy()
+                                    summary_data = []
+                                    for _, row in top_owned.iterrows():
+                                        summary_data.append({
+                                            'Player': str(row['name']),
+                                            'Position': str(row['position']),
+                                            'Salary': f"${int(row['salary']):,}",
+                                            'Projection': f"{float(row['projection']):.1f}",
+                                            'Ownership': f"{float(row['ownership']):.1f}%"
+                                        })
+                                    
+                                    summary_df = pd.DataFrame(summary_data)
+                                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
                                 else:
                                     st.warning("AI prediction returned no data, using defaults")
                                     
@@ -218,21 +231,36 @@ def opponent_modeling_section():
                 
                 with col1:
                     st.subheader("🔥 High Leverage Plays")
-                    st.dataframe(
-                        analysis['leverage_scores'].nlargest(10, 'leverage_score')[
-                            ['name', 'position', 'projection', 'ownership', 'leverage_score']
-                        ],
-                        use_container_width=True
-                    )
+                    leverage_data = analysis['leverage_scores'].nlargest(10, 'leverage_score')
+                    
+                    # Format for display
+                    display_data = []
+                    for _, row in leverage_data.iterrows():
+                        display_data.append({
+                            'Player': str(row['name']),
+                            'Pos': str(row['position']),
+                            'Proj': f"{float(row['projection']):.1f}",
+                            'Own%': f"{float(row['ownership']):.1f}",
+                            'Leverage': f"{float(row['leverage_score']):.1f}"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(display_data), use_container_width=True, hide_index=True)
                 
                 with col2:
                     st.subheader("📈 Chalk Plays")
-                    st.dataframe(
-                        analysis['chalk_players'][
-                            ['name', 'position', 'projection', 'ownership']
-                        ],
-                        use_container_width=True
-                    )
+                    chalk_data = analysis['chalk_players'].head(10)
+                    
+                    # Format for display
+                    display_data = []
+                    for _, row in chalk_data.iterrows():
+                        display_data.append({
+                            'Player': str(row['name']),
+                            'Pos': str(row['position']),
+                            'Proj': f"{float(row['projection']):.1f}",
+                            'Own%': f"{float(row['ownership']):.1f}"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(display_data), use_container_width=True, hide_index=True)
                 
                 # Ownership distribution
                 st.subheader("📊 Ownership Distribution")
@@ -248,6 +276,8 @@ def opponent_modeling_section():
                 
             except Exception as e:
                 st.error(f"Error in opponent modeling: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
 
 
 def lineup_optimization_section():
@@ -357,17 +387,18 @@ def lineup_display_section():
                 st.error(f"Export error: {str(e)}")
     
     if display_mode == "Summary":
-        # Create summary dataframe
+        # Create summary dataframe with explicit formatting
         summary_data = []
         for i, lineup in enumerate(lineups, 1):
+            metrics = lineup['metrics']
             summary_data.append({
                 'Lineup': i,
-                'Captain': lineup['captain'],
-                'Projection': f"{lineup['metrics']['total_projection']:.1f}",
-                'Ceiling': f"{lineup['metrics']['total_ceiling']:.1f}",
-                'Salary': f"${lineup['metrics']['total_salary']:,}",
-                'Ownership': f"{lineup['metrics']['avg_ownership']:.1f}%",
-                'Leverage': f"{lineup['metrics']['lineup_leverage']:.2f}"
+                'Captain': str(lineup['captain']),
+                'Projection': f"{float(metrics.get('total_projection', 0)):.1f}",
+                'Ceiling': f"{float(metrics.get('total_ceiling', 0)):.1f}",
+                'Salary': f"${int(metrics.get('total_salary', 0)):,}",
+                'Ownership': f"{float(metrics.get('avg_ownership', 0)):.1f}%",
+                'Leverage': f"{float(metrics.get('lineup_leverage', 0)):.2f}"
             })
         
         summary_df = pd.DataFrame(summary_data)
@@ -384,15 +415,16 @@ def lineup_display_section():
         st.subheader(f"Lineup {lineup_num} Details")
         
         # Lineup metrics
+        metrics = lineup['metrics']
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Projection", f"{lineup['metrics']['total_projection']:.1f}")
+            st.metric("Projection", f"{float(metrics.get('total_projection', 0)):.1f}")
         with col2:
-            st.metric("Salary", f"${lineup['metrics']['total_salary']:,}")
+            st.metric("Salary", f"${int(metrics.get('total_salary', 0)):,}")
         with col3:
-            st.metric("Ownership", f"{lineup['metrics']['avg_ownership']:.1f}%")
+            st.metric("Ownership", f"{float(metrics.get('avg_ownership', 0)):.1f}%")
         with col4:
-            st.metric("Leverage", f"{lineup['metrics']['lineup_leverage']:.2f}")
+            st.metric("Leverage", f"{float(metrics.get('lineup_leverage', 0)):.2f}")
         
         # Player details
         st.subheader("Players")
@@ -411,34 +443,35 @@ def sidebar_info():
     with st.sidebar:
         st.title("🎯 DFS Meta-Optimizer")
         st.markdown("---")
-
+        
         st.subheader("📖 About")
         st.write("""
         This optimizer uses **opponent modeling** to find lineups
         that maximize your competitive advantage, not just points.
         """)
-
+        
         st.markdown("---")
         st.subheader("⚙️ Settings")
-
+        
         st.write(f"**Salary Cap:** ${SALARY_CAP:,}")
-        st.write(f"**Roster Size:** {ROSTER_SIZE} ({ROSTER_SIZE - 1} flex + 1 captain)")
+        st.write(f"**Roster Size:** {ROSTER_SIZE} ({ROSTER_SIZE-1} flex + 1 captain)")
         st.write(f"**Captain Multiplier:** {CAPTAIN_MULTIPLIER}x")
-
-        if CLAUDE_AVAILABLE and st.session_state.claude_assistant:
+        
+        if CLAUDE_AVAILABLE and st.session_state.get('claude_assistant'):
             st.success("✅ Claude AI: Active")
         else:
             st.warning("⚠️ Claude AI: Inactive")
-
+        
         st.markdown("---")
         st.subheader("📊 Optimization Modes")
-
+        
         for mode, config in OPTIMIZATION_MODES.items():
             st.write(f"**{mode.title()}:**")
             st.write(f"- Projection: {config.get('projection_weight', 0)}")
             st.write(f"- Leverage: {config.get('leverage_weight', 0)}")
             st.write(f"- Ceiling: {config.get('ceiling_weight', 0)}")
             st.write("")
+
 
 def main():
     """Main application function"""
