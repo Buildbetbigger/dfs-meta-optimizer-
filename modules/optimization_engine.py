@@ -1,7 +1,14 @@
 """
 Lineup Optimization Engine
 
-Generates optimal DFS lineups using genetic algorithms and opponent modeling.
+Generates optimal DFS lineups using intelligent algorithms.
+
+BUG FIXES APPLIED:
+#2: Safe name matching with _get_player_data_safe()
+#3: True diversity with progressive randomization
+#4: Salary optimization to 96-100% usage
+#6: Safe .get() for all config access
+#7: Proper NaN handling throughout
 """
 
 import pandas as pd
@@ -12,8 +19,7 @@ from itertools import combinations
 
 class LineupOptimizer:
     """
-    Advanced lineup optimizer with genetic algorithms, diversity controls,
-    and opponent modeling integration.
+    Advanced lineup optimizer with bug fixes for production use
     """
     
     def __init__(self, player_data: pd.DataFrame, opponent_modeler, mode_config: Dict):
@@ -32,11 +38,11 @@ class LineupOptimizer:
         self.opponent_modeler = opponent_modeler
         self.mode_config = mode_config
         
-        # Extract configuration with safe defaults
+        # Extract configuration with safe defaults (BUG FIX #6)
         self.salary_cap = 50000
         self.roster_size = 9
         
-        # Weights for scoring
+        # Weights for scoring - safe access with .get()
         self.projection_weight = mode_config.get('projection_weight', 1.0)
         self.ceiling_weight = mode_config.get('ceiling_weight', 0.5)
         self.leverage_weight = mode_config.get('leverage_weight', 0.3)
@@ -63,10 +69,14 @@ class LineupOptimizer:
         # Track generated lineups
         self.generated_lineups = []
         self.player_usage = {}
+        
+        print(f"✅ LineupOptimizer initialized with {len(self.player_data)} players")
     
     def _get_player_data_safe(self, player_name: str) -> Optional[pd.Series]:
         """
         Safely retrieve player data with multiple matching strategies
+        
+        BUG FIX #2: Multiple fallback strategies for name matching
         
         Args:
             player_name: Name of the player to look up
@@ -86,7 +96,7 @@ class LineupOptimizer:
             return self.player_data[mask].iloc[0]
         
         # Strategy 2: Partial match (contains)
-        mask = self.player_data['name_clean'].str.contains(name_clean, na=False)
+        mask = self.player_data['name_clean'].str.contains(name_clean, na=False, regex=False)
         if mask.any():
             return self.player_data[mask].iloc[0]
         
@@ -96,12 +106,13 @@ class LineupOptimizer:
             return self.player_data[mask].iloc[0]
         
         # Not found
-        print(f"WARNING: Player '{player_name}' not found in player pool")
         return None
     
     def calculate_lineup_score(self, lineup: pd.DataFrame) -> float:
         """
         Calculate weighted score for a lineup
+        
+        BUG FIX #7: NaN handling in scoring calculations
         
         Args:
             lineup: DataFrame with selected players
@@ -109,22 +120,27 @@ class LineupOptimizer:
         Returns:
             Weighted score
         """
-        # Base scores
-        projection_score = lineup['projection'].sum() * self.projection_weight
-        ceiling_score = lineup.get('ceiling', lineup['projection'] * 1.4).sum() * self.ceiling_weight
+        # Base scores with NaN protection
+        projection_score = float(lineup['projection'].fillna(0).sum()) * self.projection_weight
+        
+        # Ceiling score
+        ceiling_values = lineup.get('ceiling', lineup['projection'] * 1.4)
+        ceiling_score = float(ceiling_values.fillna(0).sum()) * self.ceiling_weight
         
         # Leverage score
-        leverage_scores = lineup.get('leverage_score', 0)
-        if isinstance(leverage_scores, pd.Series):
-            leverage_score = leverage_scores.sum() * self.leverage_weight
-        else:
-            leverage_score = 0
+        leverage_values = lineup.get('leverage_score', pd.Series([0] * len(lineup)))
+        leverage_score = float(leverage_values.fillna(0).sum()) * self.leverage_weight
         
         # Ownership penalty
-        avg_ownership = lineup.get('ownership', 15.0).mean()
+        ownership_values = lineup.get('ownership', pd.Series([15.0] * len(lineup)))
+        avg_ownership = float(ownership_values.fillna(15.0).mean())
         ownership_score = -avg_ownership * self.ownership_penalty
         
         total_score = projection_score + ceiling_score + leverage_score + ownership_score
+        
+        # Handle NaN result
+        if np.isnan(total_score) or np.isinf(total_score):
+            return 0.0
         
         return total_score
     
@@ -179,6 +195,8 @@ class LineupOptimizer:
         """
         Optimize lineup to use more salary cap
         
+        BUG FIX #4: Ensures 96-100% salary cap usage
+        
         Args:
             lineup: Current lineup
             min_salary_pct: Target minimum salary percentage
@@ -224,12 +242,15 @@ class LineupOptimizer:
         
         return lineup
     
-    def generate_random_lineup(self, min_salary_pct: float = 0.96) -> Optional[pd.DataFrame]:
+    def generate_random_lineup(self, min_salary_pct: float = 0.96, randomness: float = 0.0) -> Optional[pd.DataFrame]:
         """
         Generate a random valid lineup
         
+        BUG FIX #3: Added randomness parameter for diversity
+        
         Args:
             min_salary_pct: Minimum salary cap utilization
+            randomness: 0-1, higher = more random selection
             
         Returns:
             Valid lineup or None if unable to generate
@@ -240,23 +261,36 @@ class LineupOptimizer:
             lineup_players = []
             remaining_salary = self.salary_cap
             
-            # Select QB (weighted by projection)
+            # Select QB (weighted by projection + randomness)
             qbs = self.player_data[self.player_data['position'] == 'QB'].copy()
             if len(qbs) == 0:
                 continue
             
-            weights = qbs['projection'].values
+            # Add randomness to weights
+            base_weights = qbs['projection'].values
+            if randomness > 0:
+                random_factor = np.random.random(len(qbs)) * randomness
+                weights = base_weights * (1 + random_factor)
+            else:
+                weights = base_weights
+            
             weights = weights / weights.sum()
             qb = qbs.sample(1, weights=weights).iloc[0]
             lineup_players.append(qb)
             remaining_salary -= qb['salary']
             
-            # Select DST (weighted by projection)
+            # Select DST
             dsts = self.player_data[self.player_data['position'] == 'DST'].copy()
             if len(dsts) == 0:
                 continue
             
-            weights = dsts['projection'].values
+            base_weights = dsts['projection'].values
+            if randomness > 0:
+                random_factor = np.random.random(len(dsts)) * randomness
+                weights = base_weights * (1 + random_factor)
+            else:
+                weights = base_weights
+            
             weights = weights / weights.sum()
             dst = dsts.sample(1, weights=weights).iloc[0]
             lineup_players.append(dst)
@@ -275,7 +309,13 @@ class LineupOptimizer:
             if len(rbs) < 2:
                 continue
             
-            weights = rbs['projection'].values
+            base_weights = rbs['projection'].values
+            if randomness > 0:
+                random_factor = np.random.random(len(rbs)) * randomness
+                weights = base_weights * (1 + random_factor)
+            else:
+                weights = base_weights
+            
             weights = weights / weights.sum()
             selected_rbs = rbs.sample(2, weights=weights, replace=False)
             
@@ -294,7 +334,13 @@ class LineupOptimizer:
             if len(wrs) < 3:
                 continue
             
-            weights = wrs['projection'].values
+            base_weights = wrs['projection'].values
+            if randomness > 0:
+                random_factor = np.random.random(len(wrs)) * randomness
+                weights = base_weights * (1 + random_factor)
+            else:
+                weights = base_weights
+            
             weights = weights / weights.sum()
             selected_wrs = wrs.sample(3, weights=weights, replace=False)
             
@@ -313,7 +359,13 @@ class LineupOptimizer:
             if len(tes) < 1:
                 continue
             
-            weights = tes['projection'].values
+            base_weights = tes['projection'].values
+            if randomness > 0:
+                random_factor = np.random.random(len(tes)) * randomness
+                weights = base_weights * (1 + random_factor)
+            else:
+                weights = base_weights
+            
             weights = weights / weights.sum()
             te = tes.sample(1, weights=weights).iloc[0]
             lineup_players.append(te)
@@ -360,6 +412,8 @@ class LineupOptimizer:
         """
         Generate multiple diverse lineups
         
+        BUG FIX #3: Progressive randomization for true diversity
+        
         Args:
             num_lineups: Number of lineups to generate
             diversity_factor: Controls uniqueness (0-1, higher = more unique)
@@ -381,11 +435,10 @@ class LineupOptimizer:
         while len(lineups) < num_lineups and attempts < max_attempts:
             attempts += 1
             
-            # Generate candidate lineup with progressive randomization
-            # Add more randomness as attempts increase
-            randomness_boost = min(attempts / (max_attempts / 2), 1.0)
+            # Progressive randomization - increase as attempts grow
+            randomness_boost = min(attempts / (max_attempts / 2), 1.0) * diversity_factor
             
-            lineup = self.generate_random_lineup(min_salary_pct)
+            lineup = self.generate_random_lineup(min_salary_pct, randomness=randomness_boost)
             
             if lineup is None:
                 continue
@@ -456,7 +509,7 @@ class LineupOptimizer:
             'num_lineups': len(lineups),
             'avg_projection': np.mean([lu['projection'].sum() for lu in lineups]),
             'avg_salary': np.mean([lu['salary'].sum() for lu in lineups]),
-            'avg_ownership': np.mean([lu.get('ownership', 15.0).mean() for lu in lineups]),
+            'avg_ownership': np.mean([lu.get('ownership', pd.Series([15.0])).mean() for lu in lineups]),
             'salary_efficiency': [],
             'unique_players': set()
         }
@@ -481,8 +534,8 @@ class LineupOptimizer:
                     if name not in exposures:
                         exposures[name] = {
                             'count': 0,
-                            'ownership': player_data.get('ownership', 15.0),
-                            'leverage': player_data.get('leverage_score', 100)
+                            'ownership': float(player_data.get('ownership', 15.0)),
+                            'leverage': float(player_data.get('leverage_score', 100))
                         }
                     exposures[name]['count'] += 1
         
