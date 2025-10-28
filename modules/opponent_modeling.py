@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class OpponentModeler:
+class OpponentModel:
     """
     Models opponent behavior and calculates strategic advantage metrics
     
