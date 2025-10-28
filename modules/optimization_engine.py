@@ -176,6 +176,12 @@ class LineupOptimizer:
         ceiling_weight = mode_config.get('ceiling_weight', 0.3)
         ownership_weight = mode_config.get('ownership_weight', 0.01)
         
+        # CRITICAL FIX: Fill any NaN values in required columns
+        df['projection'] = df['projection'].fillna(0)
+        df['leverage_score'] = df['leverage_score'].fillna(0)
+        df['ceiling'] = df['ceiling'].fillna(df['projection'] * 1.3)
+        df['ownership'] = df['ownership'].fillna(15.0)
+        
         # Base score from weighted combination
         score = (
             df['projection'] * projection_weight +
@@ -183,6 +189,9 @@ class LineupOptimizer:
             df['ceiling'] * ceiling_weight -
             df['ownership'] * ownership_weight
         )
+        
+        # Fill any NaN in the calculated score
+        score = score.fillna(0)
         
         # CRITICAL FIX: Progressive randomization (15-50% variance)
         # More lineups generated = stronger randomization needed
@@ -196,7 +205,11 @@ class LineupOptimizer:
         
         # Usage-based penalty (promote less-used players)
         usage_counts = pd.Series({name: self.player_usage.get(name, 0) for name in df['name']})
-        usage_penalty = 1 - (usage_counts / max(usage_counts.max(), 1)) * 0.3  # Up to 30% penalty
+        max_usage = usage_counts.max()
+        if max_usage > 0:
+            usage_penalty = 1 - (usage_counts / max_usage) * 0.3  # Up to 30% penalty
+        else:
+            usage_penalty = pd.Series(1.0, index=usage_counts.index)
         
         # Anti-chalk bonus in leverage modes
         if leverage_weight > 0:
@@ -205,6 +218,9 @@ class LineupOptimizer:
         
         # Apply randomization and penalties
         score = score * random_factor * usage_penalty
+        
+        # Final check: replace any NaN with 0
+        score = score.fillna(0)
         
         return score
     
@@ -223,25 +239,62 @@ class LineupOptimizer:
         Returns:
             Captain player name or None
         """
+        if len(available_players) == 0:
+            return None
+        
         # Get more candidates for better diversity
         num_candidates = min(15, len(available_players))
         captain_candidates = available_players.nlargest(num_candidates, 'optimizer_score')
         
-        # CRITICAL FIX: Probabilistic selection (not deterministic)
+        if len(captain_candidates) == 0:
+            return None
+        
+        # CRITICAL FIX: Probabilistic selection with NaN handling
         # Calculate selection probabilities based on scores
         scores = captain_candidates['optimizer_score'].values
-        min_score = scores.min()
+        
+        # Handle NaN or invalid scores
+        if np.any(np.isnan(scores)) or np.all(scores <= 0):
+            # Fallback to uniform random selection
+            captain_idx = np.random.randint(0, len(captain_candidates))
+            captain_name = captain_candidates.iloc[captain_idx]['name']
+            return captain_name
+        
+        # Normalize scores to positive values
+        min_score = np.nanmin(scores)
         normalized_scores = scores - min_score + 1  # Ensure all positive
         
         # Temperature increases with iteration (more random over time)
         temperature = 1.0 + (iteration / 20)  # Gradually increases
-        probabilities = np.exp(normalized_scores / temperature)
-        probabilities = probabilities / probabilities.sum()
         
-        # Select captain probabilistically
-        captain_idx = np.random.choice(len(captain_candidates), p=probabilities)
+        # Calculate probabilities with overflow protection
+        try:
+            # Prevent overflow in exp calculation
+            normalized_scores_temp = normalized_scores / temperature
+            max_score = np.max(normalized_scores_temp)
+            probabilities = np.exp(normalized_scores_temp - max_score)  # Subtract max for numerical stability
+            
+            # Check for invalid probabilities
+            if np.any(np.isnan(probabilities)) or np.sum(probabilities) == 0:
+                # Fallback to uniform distribution
+                probabilities = np.ones(len(captain_candidates))
+            
+            # Normalize to sum to 1
+            probabilities = probabilities / probabilities.sum()
+            
+            # Final check for NaN
+            if np.any(np.isnan(probabilities)):
+                # Use uniform distribution
+                captain_idx = np.random.randint(0, len(captain_candidates))
+            else:
+                # Select captain probabilistically
+                captain_idx = np.random.choice(len(captain_candidates), p=probabilities)
+                
+        except (ValueError, FloatingPointError):
+            # Any numerical error - fall back to uniform random
+            captain_idx = np.random.randint(0, len(captain_candidates))
+        
         captain_name = captain_candidates.iloc[captain_idx]['name']
-        
         return captain_name
     
     def _select_flex_players(self,
@@ -277,17 +330,24 @@ class LineupOptimizer:
             if affordable.empty:
                 return []  # Can't fill lineup
             
-            # Apply strategy
+            # Apply strategy with NaN handling
             if strategy == 0:  # Greedy with noise
                 # Pick from top candidates with probability
                 num_candidates = min(8, len(affordable))
                 candidates = affordable.nlargest(num_candidates, 'optimizer_score')
                 
                 scores = candidates['optimizer_score'].values
-                probabilities = scores / scores.sum()
                 
-                idx = np.random.choice(len(candidates), p=probabilities)
-                player_name = candidates.iloc[idx]['name']
+                # Handle NaN or invalid scores
+                if np.any(np.isnan(scores)) or np.all(scores <= 0):
+                    player_name = candidates.sample(n=1).iloc[0]['name']
+                else:
+                    probabilities = scores / scores.sum()
+                    if np.any(np.isnan(probabilities)):
+                        player_name = candidates.sample(n=1).iloc[0]['name']
+                    else:
+                        idx = np.random.choice(len(candidates), p=probabilities)
+                        player_name = candidates.iloc[idx]['name']
                 
             elif strategy == 1:  # Balanced selection
                 # Mix of top and random
@@ -298,22 +358,38 @@ class LineupOptimizer:
                 else:
                     # Second half: weighted random
                     scores = affordable['optimizer_score'].values
-                    min_score = scores.min()
-                    normalized = scores - min_score + 1
-                    probabilities = normalized / normalized.sum()
                     
-                    idx = np.random.choice(len(affordable), p=probabilities)
-                    player_name = affordable.iloc[idx]['name']
+                    # Handle NaN or invalid scores
+                    if np.any(np.isnan(scores)) or np.all(scores <= 0):
+                        player_name = affordable.sample(n=1).iloc[0]['name']
+                    else:
+                        min_score = np.nanmin(scores)
+                        normalized = scores - min_score + 1
+                        probabilities = normalized / normalized.sum()
+                        
+                        if np.any(np.isnan(probabilities)):
+                            player_name = affordable.sample(n=1).iloc[0]['name']
+                        else:
+                            idx = np.random.choice(len(affordable), p=probabilities)
+                            player_name = affordable.iloc[idx]['name']
             
             else:  # strategy == 2: Exploratory
                 # More random, weighted by score
                 scores = affordable['optimizer_score'].values
-                min_score = scores.min()
-                normalized = (scores - min_score + 1) ** 0.7  # Less aggressive weighting
-                probabilities = normalized / normalized.sum()
                 
-                idx = np.random.choice(len(affordable), p=probabilities)
-                player_name = affordable.iloc[idx]['name']
+                # Handle NaN or invalid scores
+                if np.any(np.isnan(scores)) or np.all(scores <= 0):
+                    player_name = affordable.sample(n=1).iloc[0]['name']
+                else:
+                    min_score = np.nanmin(scores)
+                    normalized = (scores - min_score + 1) ** 0.7  # Less aggressive weighting
+                    probabilities = normalized / normalized.sum()
+                    
+                    if np.any(np.isnan(probabilities)):
+                        player_name = affordable.sample(n=1).iloc[0]['name']
+                    else:
+                        idx = np.random.choice(len(affordable), p=probabilities)
+                        player_name = affordable.iloc[idx]['name']
             
             # Add player and update remaining
             selected.append(player_name)
