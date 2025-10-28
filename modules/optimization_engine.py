@@ -106,7 +106,8 @@ class LineupOptimizer:
         print(f"   Required usage: 96%+ (${int(SALARY_CAP * 0.96):,}+)")
         
         if mode not in OPTIMIZATION_MODES:
-            raise ValueError(f"Invalid mode: {mode}")
+            print(f"⚠️ Warning: Mode '{mode}' not found, using 'balanced'")
+            mode = 'balanced'
         
         mode_config = OPTIMIZATION_MODES[mode]
         self.generated_lineups = []
@@ -169,12 +170,18 @@ class LineupOptimizer:
         """
         df = self.players_df.copy()
         
+        # CRITICAL FIX: Get weights with safe defaults
+        projection_weight = mode_config.get('projection_weight', 1.0)
+        leverage_weight = mode_config.get('leverage_weight', 0.5)
+        ceiling_weight = mode_config.get('ceiling_weight', 0.3)
+        ownership_weight = mode_config.get('ownership_weight', 0.01)
+        
         # Base score from weighted combination
         score = (
-            df['projection'] * mode_config['projection_weight'] +
-            df['leverage_score'] * mode_config['leverage_weight'] +
-            df['ceiling'] * mode_config['ceiling_weight'] -
-            df['ownership'] * mode_config['ownership_weight']
+            df['projection'] * projection_weight +
+            df['leverage_score'] * leverage_weight +
+            df['ceiling'] * ceiling_weight -
+            df['ownership'] * ownership_weight
         )
         
         # CRITICAL FIX: Progressive randomization (15-50% variance)
@@ -192,7 +199,7 @@ class LineupOptimizer:
         usage_penalty = 1 - (usage_counts / max(usage_counts.max(), 1)) * 0.3  # Up to 30% penalty
         
         # Anti-chalk bonus in leverage modes
-        if mode_config.get('leverage_weight', 0) > 0:
+        if leverage_weight > 0:
             chalk_bonus = (100 - df['ownership']) / 100 * 0.2  # Up to 20% bonus for low-owned
             score = score * (1 + chalk_bonus)
         
