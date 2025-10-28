@@ -1,381 +1,388 @@
 """
-Opponent Modeling Module
+Opponent Modeling Engine
+Version 5.0.0
 
-Analyzes field behavior and calculates leverage scores.
+Core opponent modeling logic for DFS lineup optimization:
+- Field ownership prediction and analysis
+- Leverage score calculation
+- Chalk play identification
+- Contrarian opportunity detection
+- Strategic lineup metrics
 
 BUG FIXES APPLIED:
-- Safe player lookups with _get_player_safe()
-- Handles whitespace and case issues in names
-- Never crashes on missing players
-- Proper NaN handling in calculations
+- Name matching with .strip() to handle whitespace
+- Safe player lookups with fallbacks
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Tuple, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class OpponentModeler:
     """
-    Models opponent behavior and calculates leverage opportunities
+    Models opponent behavior and calculates strategic advantage metrics
     
-    Key Features:
-    - Leverage scoring (ceiling / ownership)
-    - Chalk identification
-    - Field behavior prediction
-    - Stack analysis
+    Key Responsibilities:
+    1. Calculate leverage scores (ceiling vs ownership)
+    2. Identify chalk plays (high ownership)
+    3. Find contrarian opportunities (low ownership, high projection)
+    4. Analyze field distribution patterns
+    5. Provide strategic recommendations
     """
     
-    def __init__(self, player_data: pd.DataFrame):
+    def __init__(self, players_df: pd.DataFrame):
         """
-        Initialize opponent modeler
+        Initialize opponent modeler with player data
         
         Args:
-            player_data: DataFrame with player information
+            players_df: DataFrame with columns: player_name, position, team,
+                       salary, projection, ceiling, ownership
         """
-        self.player_data = player_data.copy()
-        # Create clean name column for matching
-        self.player_data['name_clean'] = self.player_data['name'].astype(str).str.strip().str.lower()
+        self.players_df = players_df.copy()
         
-        print(f"✅ OpponentModeler initialized with {len(self.player_data)} players")
+        # BUG FIX #2: Clean names on initialization
+        self._clean_player_names()
+        
+        # Calculate all metrics
+        self._calculate_metrics()
+        
+        logger.info(f"OpponentModeler initialized with {len(players_df)} players")
+    
+    def _clean_player_names(self):
+        """Clean player names to handle whitespace issues - BUG FIX #2"""
+        if 'player_name' in self.players_df.columns:
+            self.players_df['player_name'] = self.players_df['player_name'].str.strip()
     
     def _get_player_safe(self, player_name: str) -> Optional[pd.Series]:
         """
-        Safely retrieve player data with multiple matching strategies
-        
-        BUG FIX #2: Multiple fallback strategies for name matching
+        Safely lookup player by name with whitespace handling
         
         Args:
-            player_name: Name of player to lookup
+            player_name: Name of player to look up
             
         Returns:
-            Player Series or None if not found
+            Player data Series or None if not found
         """
-        if pd.isna(player_name):
-            return None
+        # BUG FIX #2: Strip whitespace before lookup
+        clean_name = str(player_name).strip()
         
-        name_clean = str(player_name).strip().lower()
+        matches = self.players_df[self.players_df['player_name'] == clean_name]
         
-        # Strategy 1: Exact match on clean name
-        mask = self.player_data['name_clean'] == name_clean
-        if mask.any():
-            return self.player_data[mask].iloc[0]
+        if len(matches) > 0:
+            return matches.iloc[0]
         
-        # Strategy 2: Partial match (contains)
-        mask = self.player_data['name_clean'].str.contains(name_clean, na=False, regex=False)
-        if mask.any():
-            return self.player_data[mask].iloc[0]
+        # Fallback: Try case-insensitive match
+        matches = self.players_df[
+            self.players_df['player_name'].str.lower() == clean_name.lower()
+        ]
         
-        # Strategy 3: Try original name column
-        mask = self.player_data['name'].astype(str).str.strip().str.lower() == name_clean
-        if mask.any():
-            return self.player_data[mask].iloc[0]
+        if len(matches) > 0:
+            logger.warning(f"Player '{clean_name}' found with case-insensitive match")
+            return matches.iloc[0]
         
-        # Not found - return None instead of crashing
+        logger.warning(f"Player '{clean_name}' not found in opponent model")
         return None
     
-    def calculate_leverage_scores(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculate leverage scores for all players
-        
-        Leverage = (Ceiling / Ownership%) * 100
-        
-        BUG FIX #6: Safe .get() for missing columns with defaults
-        
-        Args:
-            df: DataFrame with player data
-            
-        Returns:
-            DataFrame with leverage_score column added
-        """
-        df = df.copy()
-        
+    def _calculate_metrics(self):
+        """Calculate all opponent modeling metrics"""
         # Ensure required columns exist
-        if 'ceiling' not in df.columns:
-            df['ceiling'] = df['projection'] * 1.4
-        else:
-            df['ceiling'] = pd.to_numeric(df['ceiling'], errors='coerce').fillna(df['projection'] * 1.4)
+        if 'ceiling' not in self.players_df.columns:
+            self.players_df['ceiling'] = self.players_df['projection'] * 1.3
         
-        if 'ownership' not in df.columns:
-            df['ownership'] = 15.0
-        else:
-            df['ownership'] = pd.to_numeric(df['ownership'], errors='coerce').fillna(15.0)
+        if 'ownership' not in self.players_df.columns:
+            self.players_df['ownership'] = 15.0  # Default 15%
         
-        # Calculate leverage with NaN protection
-        def safe_leverage(row):
-            try:
-                ceiling = float(row['ceiling'])
-                ownership = float(row['ownership'])
-                
-                # Avoid division by zero
-                if ownership < 0.1:
-                    ownership = 0.1
-                
-                leverage = (ceiling / ownership) * 100
-                
-                # Cap extreme values
-                if np.isnan(leverage) or np.isinf(leverage):
-                    return 100.0
-                
-                return min(leverage, 1000.0)  # Cap at 1000
-                
-            except (ValueError, TypeError, ZeroDivisionError):
-                return 100.0
-        
-        df['leverage_score'] = df.apply(safe_leverage, axis=1)
-        
-        return df
-    
-    def predict_field_ownership(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Predict field ownership based on heuristics
-        
-        Args:
-            df: DataFrame with player data
-            
-        Returns:
-            DataFrame with predicted_ownership column
-        """
-        df = df.copy()
-        
-        # Calculate value (proj per $1000)
-        df['value'] = df['projection'] / (df['salary'] / 1000)
-        
-        # Normalize factors (0-1 scale)
-        salary_norm = (df['salary'].max() - df['salary']) / (df['salary'].max() - df['salary'].min() + 0.001)
-        proj_norm = (df['projection'] - df['projection'].min()) / (df['projection'].max() - df['projection'].min() + 0.001)
-        value_norm = (df['value'] - df['value'].min()) / (df['value'].max() - df['value'].min() + 0.001)
-        
-        # Weighted combination
-        ownership_score = (
-            salary_norm * 0.3 +
-            proj_norm * 0.4 +
-            value_norm * 0.3
+        # Calculate leverage score (ceiling relative to ownership)
+        ownership_safe = self.players_df['ownership'].replace(0, 0.1)  # Avoid div by 0
+        self.players_df['leverage_score'] = (
+            self.players_df['ceiling'] / ownership_safe * 10
         )
         
-        # Scale to 5-40% ownership range
-        df['predicted_ownership'] = 5 + (ownership_score * 35)
+        # Calculate value score (points per $1K)
+        self.players_df['value'] = (
+            self.players_df['projection'] / (self.players_df['salary'] / 1000)
+        )
         
-        # Clean up NaN values
-        df['predicted_ownership'] = df['predicted_ownership'].fillna(15.0)
+        # Flag chalk plays (>30% ownership)
+        self.players_df['is_chalk'] = self.players_df['ownership'] > 30.0
         
-        return df
+        # Flag contrarian plays (<10% ownership)
+        self.players_df['is_contrarian'] = self.players_df['ownership'] < 10.0
+        
+        # Calculate strategic score (combination of projection, leverage, value)
+        self.players_df['strategic_score'] = (
+            self.players_df['projection'] * 0.4 +
+            self.players_df['leverage_score'] * 0.3 +
+            self.players_df['value'] * 30 * 0.3  # Scale value to similar range
+        )
+        
+        logger.info("All metrics calculated successfully")
     
-    def identify_chalk_plays(self, df: pd.DataFrame, threshold: float = 25.0) -> List[str]:
+    def identify_chalk_plays(self, threshold: float = 30.0) -> pd.DataFrame:
         """
-        Identify highly-owned "chalk" plays
+        Identify high-ownership chalk plays
         
         Args:
-            df: DataFrame with ownership data
-            threshold: Ownership threshold for chalk (default 25%)
+            threshold: Ownership percentage threshold for chalk
             
         Returns:
-            List of player names considered chalk
+            DataFrame of chalk players sorted by ownership
         """
-        ownership_col = 'ownership' if 'ownership' in df.columns else 'predicted_ownership'
+        chalk = self.players_df[self.players_df['ownership'] >= threshold].copy()
+        chalk = chalk.sort_values('ownership', ascending=False)
         
-        if ownership_col not in df.columns:
-            return []
-        
-        chalk_players = df[df[ownership_col] >= threshold]['name'].tolist()
-        
-        return chalk_players
+        logger.info(f"Found {len(chalk)} chalk plays (>={threshold}% ownership)")
+        return chalk
     
-    def identify_leverage_plays(self, df: pd.DataFrame, min_leverage: float = 150.0) -> List[str]:
+    def identify_leverage_opportunities(self, min_leverage: float = 15.0) -> pd.DataFrame:
         """
-        Identify high-leverage plays
+        Identify high-leverage plays (good ceiling vs ownership ratio)
         
         Args:
-            df: DataFrame with leverage scores
             min_leverage: Minimum leverage score threshold
             
         Returns:
-            List of player names with high leverage
+            DataFrame of leverage plays sorted by leverage score
         """
-        if 'leverage_score' not in df.columns:
-            df = self.calculate_leverage_scores(df)
+        leverage_plays = self.players_df[
+            self.players_df['leverage_score'] >= min_leverage
+        ].copy()
+        leverage_plays = leverage_plays.sort_values('leverage_score', ascending=False)
         
-        leverage_players = df[df['leverage_score'] >= min_leverage]['name'].tolist()
-        
-        return leverage_players
+        logger.info(f"Found {len(leverage_plays)} leverage opportunities (>={min_leverage})")
+        return leverage_plays
     
-    def calculate_lineup_leverage(self, lineup: pd.DataFrame) -> float:
+    def identify_contrarian_plays(self, 
+                                  max_ownership: float = 10.0,
+                                  min_projection: float = None) -> pd.DataFrame:
         """
-        Calculate total leverage score for a lineup
+        Identify contrarian plays (low ownership, solid projection)
         
         Args:
-            lineup: DataFrame with selected players
+            max_ownership: Maximum ownership for contrarian
+            min_projection: Minimum projection threshold (default: median)
             
         Returns:
-            Total leverage score
+            DataFrame of contrarian plays
         """
-        if 'leverage_score' not in lineup.columns:
-            lineup = self.calculate_leverage_scores(lineup)
+        if min_projection is None:
+            min_projection = self.players_df['projection'].median()
         
-        return float(lineup['leverage_score'].sum())
+        contrarian = self.players_df[
+            (self.players_df['ownership'] <= max_ownership) &
+            (self.players_df['projection'] >= min_projection)
+        ].copy()
+        contrarian = contrarian.sort_values('projection', ascending=False)
+        
+        logger.info(f"Found {len(contrarian)} contrarian plays "
+                   f"(<={max_ownership}% own, >={min_projection:.1f} proj)")
+        return contrarian
     
-    def calculate_lineup_differentiation(self, lineup: pd.DataFrame, 
-                                        chalk_threshold: float = 25.0) -> Dict:
+    def calculate_lineup_leverage(self, lineup_names: List[str]) -> Dict:
         """
-        Calculate how differentiated a lineup is from the field
+        Calculate leverage metrics for a complete lineup
         
         Args:
-            lineup: DataFrame with selected players
-            chalk_threshold: Ownership threshold for chalk
+            lineup_names: List of player names in lineup
             
         Returns:
-            Dictionary with differentiation metrics
+            Dictionary with leverage metrics
         """
-        ownership_col = 'ownership' if 'ownership' in lineup.columns else 'predicted_ownership'
+        # Get lineup players with safe lookups
+        lineup_players = []
+        for name in lineup_names:
+            player = self._get_player_safe(name)
+            if player is not None:
+                lineup_players.append(player.to_dict())
         
-        if ownership_col not in lineup.columns:
-            return {
-                'avg_ownership': 15.0,
-                'chalk_count': 0,
-                'leverage_score': 0,
-                'differentiation_score': 85.0
-            }
-        
-        avg_ownership = float(lineup[ownership_col].mean())
-        chalk_count = int(len(lineup[lineup[ownership_col] >= chalk_threshold]))
-        leverage_score = self.calculate_lineup_leverage(lineup) if 'leverage_score' in lineup.columns else 0
-        
-        metrics = {
-            'avg_ownership': avg_ownership,
-            'chalk_count': chalk_count,
-            'leverage_score': float(leverage_score),
-            'differentiation_score': (100 - avg_ownership) + (leverage_score / 10)
-        }
-        
-        return metrics
-    
-    def compare_to_field(self, lineup: pd.DataFrame) -> Dict:
-        """
-        Compare lineup construction to typical field approach
-        
-        Args:
-            lineup: DataFrame with selected players
-            
-        Returns:
-            Comparison metrics
-        """
-        ownership_col = 'ownership' if 'ownership' in lineup.columns else 'predicted_ownership'
-        
-        if ownership_col not in lineup.columns:
-            return {
-                'ownership_diff': 0.0,
-                'salary_diff': 0.0,
-                'contrarian_score': 0.0
-            }
-        
-        lineup_own = float(lineup[ownership_col].mean())
-        field_own = float(self.player_data[ownership_col].mean()) if ownership_col in self.player_data.columns else 15.0
-        
-        lineup_salary = float(lineup['salary'].sum())
-        avg_salary = float(self.player_data['salary'].mean() * 9)  # 9 players
-        
-        metrics = {
-            'ownership_diff': lineup_own - field_own,
-            'salary_diff': lineup_salary - avg_salary,
-            'contrarian_score': max(0, field_own - lineup_own)
-        }
-        
-        return metrics
-    
-    def calculate_lineup_metrics(self, lineup: pd.DataFrame) -> Dict:
-        """
-        Calculate comprehensive metrics for a lineup
-        
-        BUG FIX #2: Safe player lookups, handles missing players gracefully
-        
-        Args:
-            lineup: DataFrame with selected players
-            
-        Returns:
-            Dictionary of metrics
-        """
-        # Safely get player data for each player in lineup
-        lineup_with_data = []
-        for _, player in lineup.iterrows():
-            player_data = self._get_player_safe(player['name'])
-            if player_data is not None:
-                lineup_with_data.append(player_data)
-        
-        if not lineup_with_data:
-            # Return safe defaults if no players found
+        if not lineup_players:
+            logger.warning("No valid players found in lineup")
             return {
                 'total_projection': 0,
-                'total_salary': 0,
-                'avg_ownership': 15.0,
                 'total_ceiling': 0,
-                'leverage_score': 0,
-                'salary_utilization': 0
+                'avg_ownership': 0,
+                'avg_leverage': 0,
+                'chalk_count': 0,
+                'contrarian_count': 0
             }
         
-        # Create DataFrame from found players
-        lineup_df = pd.DataFrame(lineup_with_data)
+        lineup_df = pd.DataFrame(lineup_players)
         
-        # Calculate leverage if not present
-        if 'leverage_score' not in lineup_df.columns:
-            lineup_df = self.calculate_leverage_scores(lineup_df)
-        
-        # Safe calculations with .get()
+        # Calculate metrics
         metrics = {
-            'total_projection': float(lineup_df['projection'].sum()),
-            'total_salary': int(lineup_df['salary'].sum()),
-            'avg_ownership': float(lineup_df.get('ownership', pd.Series([15.0])).mean()),
-            'total_ceiling': float(lineup_df.get('ceiling', lineup_df['projection'] * 1.4).sum()),
-            'leverage_score': float(lineup_df['leverage_score'].sum()),
-            'salary_utilization': (float(lineup_df['salary'].sum()) / 50000) * 100
+            'total_projection': lineup_df['projection'].sum(),
+            'total_ceiling': lineup_df['ceiling'].sum(),
+            'avg_ownership': lineup_df['ownership'].mean(),
+            'avg_leverage': lineup_df['leverage_score'].mean(),
+            'chalk_count': (lineup_df['ownership'] > 30).sum(),
+            'contrarian_count': (lineup_df['ownership'] < 10).sum(),
+            'total_salary': lineup_df['salary'].sum(),
+            'avg_value': lineup_df['value'].mean()
         }
         
         return metrics
     
-    def get_leverage_opportunities(self, top_n: int = 10) -> pd.DataFrame:
+    def analyze_field_distribution(self) -> Dict:
         """
-        Get top leverage opportunities
+        Analyze overall field ownership distribution
         
-        Args:
-            top_n: Number of top opportunities to return
-            
         Returns:
-            DataFrame with top leverage plays
+            Dictionary with field analysis
         """
-        df = self.player_data.copy()
+        ownership_stats = self.players_df['ownership'].describe()
         
-        if 'leverage_score' not in df.columns:
-            df = self.calculate_leverage_scores(df)
+        analysis = {
+            'avg_ownership': ownership_stats['mean'],
+            'median_ownership': ownership_stats['50%'],
+            'ownership_std': ownership_stats['std'],
+            'min_ownership': ownership_stats['min'],
+            'max_ownership': ownership_stats['max'],
+            'chalk_count': (self.players_df['ownership'] > 30).sum(),
+            'contrarian_count': (self.players_df['ownership'] < 10).sum(),
+            'high_leverage_count': (self.players_df['leverage_score'] > 15).sum(),
+            'field_concentration': (self.players_df['ownership'] > 30).sum() / len(self.players_df)
+        }
         
-        top_leverage = df.nlargest(top_n, 'leverage_score')[[
-            'name', 'position', 'team', 'salary', 'projection', 'ceiling', 
-            'ownership', 'leverage_score'
-        ]].copy()
+        logger.info(f"Field analysis: {analysis['chalk_count']} chalk, "
+                   f"{analysis['contrarian_count']} contrarian")
         
-        return top_leverage
+        return analysis
     
-    def analyze_stacking_correlation(self, lineup: pd.DataFrame) -> Dict:
+    def get_strategic_recommendations(self, 
+                                     lineup_names: List[str],
+                                     contest_type: str = 'GPP') -> Dict:
         """
-        Analyze QB-pass catcher correlation in lineup
+        Get strategic recommendations for a lineup
         
         Args:
-            lineup: DataFrame with selected players
+            lineup_names: List of player names in lineup
+            contest_type: Type of contest ('GPP', 'CASH', 'TOURNAMENT')
             
         Returns:
-            Stacking analysis
+            Dictionary with recommendations
         """
-        qb_team = lineup[lineup['position'] == 'QB']['team'].values
+        metrics = self.calculate_lineup_leverage(lineup_names)
         
-        if len(qb_team) == 0:
-            return {'stacked': False, 'stack_count': 0}
+        recommendations = {
+            'lineup_type': '',
+            'suggestions': [],
+            'warnings': [],
+            'leverage_rating': 'Unknown'
+        }
         
-        qb_team = qb_team[0]
+        # Analyze lineup construction
+        if metrics['chalk_count'] >= 5:
+            recommendations['lineup_type'] = 'Chalk-Heavy'
+            recommendations['warnings'].append(
+                f"High chalk exposure ({metrics['chalk_count']} players >30% owned)"
+            )
+        elif metrics['contrarian_count'] >= 4:
+            recommendations['lineup_type'] = 'Contrarian'
+            recommendations['suggestions'].append(
+                "Strong contrarian build for differentiation"
+            )
+        else:
+            recommendations['lineup_type'] = 'Balanced'
         
-        # Count pass catchers from same team
-        pass_catchers = lineup[lineup['position'].isin(['WR', 'TE'])]
-        stack_count = int(len(pass_catchers[pass_catchers['team'] == qb_team]))
+        # Leverage assessment
+        if metrics['avg_leverage'] > 20:
+            recommendations['leverage_rating'] = 'Excellent'
+        elif metrics['avg_leverage'] > 15:
+            recommendations['leverage_rating'] = 'Good'
+        elif metrics['avg_leverage'] > 10:
+            recommendations['leverage_rating'] = 'Average'
+        else:
+            recommendations['leverage_rating'] = 'Poor'
+            recommendations['warnings'].append(
+                "Low average leverage score - consider more contrarian plays"
+            )
+        
+        # Contest-specific recommendations
+        if contest_type == 'GPP':
+            if metrics['avg_ownership'] > 25:
+                recommendations['warnings'].append(
+                    "High avg ownership for GPP - consider fading chalk"
+                )
+            if metrics['avg_leverage'] < 15:
+                recommendations['suggestions'].append(
+                    "Consider adding higher leverage plays for GPP"
+                )
+        elif contest_type == 'CASH':
+            if metrics['chalk_count'] < 3:
+                recommendations['suggestions'].append(
+                    "Consider adding more chalk for cash game safety"
+                )
+        
+        return recommendations
+    
+    def get_players_dataframe(self) -> pd.DataFrame:
+        """Get the full players DataFrame with all calculated metrics"""
+        return self.players_df.copy()
+    
+    def get_player_metrics(self, player_name: str) -> Optional[Dict]:
+        """
+        Get metrics for a specific player
+        
+        Args:
+            player_name: Name of player
+            
+        Returns:
+            Dictionary of player metrics or None if not found
+        """
+        player = self._get_player_safe(player_name)
+        
+        if player is None:
+            return None
         
         return {
-            'stacked': stack_count > 0,
-            'qb_team': str(qb_team),
-            'stack_count': stack_count,
-            'correlation_score': stack_count * 1.3  # Correlation multiplier
+            'player_name': player['player_name'],
+            'position': player['position'],
+            'team': player['team'],
+            'salary': player['salary'],
+            'projection': player['projection'],
+            'ceiling': player['ceiling'],
+            'ownership': player['ownership'],
+            'leverage_score': player['leverage_score'],
+            'value': player['value'],
+            'is_chalk': player['is_chalk'],
+            'is_contrarian': player['is_contrarian'],
+            'strategic_score': player['strategic_score']
         }
+    
+    def compare_lineups(self, lineup1: List[str], lineup2: List[str]) -> Dict:
+        """
+        Compare two lineups on leverage metrics
+        
+        Args:
+            lineup1: First lineup
+            lineup2: Second lineup
+            
+        Returns:
+            Comparison dictionary
+        """
+        metrics1 = self.calculate_lineup_leverage(lineup1)
+        metrics2 = self.calculate_lineup_leverage(lineup2)
+        
+        return {
+            'lineup1': metrics1,
+            'lineup2': metrics2,
+            'projection_diff': metrics1['total_projection'] - metrics2['total_projection'],
+            'leverage_diff': metrics1['avg_leverage'] - metrics2['avg_leverage'],
+            'ownership_diff': metrics1['avg_ownership'] - metrics2['avg_ownership']
+        }
+
+
+# Helper functions
+def create_opponent_model(players_df: pd.DataFrame) -> OpponentModeler:
+    """Factory function to create opponent modeler"""
+    return OpponentModeler(players_df)
+
+
+def quick_leverage_analysis(players_df: pd.DataFrame) -> Dict:
+    """Quick leverage analysis without full model"""
+    model = OpponentModeler(players_df)
+    return model.analyze_field_distribution()
