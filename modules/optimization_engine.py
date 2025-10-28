@@ -31,7 +31,8 @@ class LineupOptimizer:
             players_df: DataFrame with player data and metrics
             opponent_model: OpponentModel instance
         """
-        self.players_df = players_df.copy()
+        # CRITICAL FIX: Use opponent_model's DataFrame which has leverage_score calculated
+        self.players_df = opponent_model.players_df.copy()
         
         # CRITICAL FIX: Clean all player names on initialization
         self.players_df['name'] = (
