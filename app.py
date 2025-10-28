@@ -71,13 +71,6 @@ def load_csv_data(uploaded_file) -> Optional[pd.DataFrame]:
             df['name'] = df['first_name'].fillna('') + ' ' + df['last_name'].fillna('')
             df['name'] = df['name'].str.strip()
         
-        # Filter out DST/team entries
-        initial_count = len(df)
-        df = df[df['position'] != 'DST'].copy()
-        removed_count = initial_count - len(df)
-        if removed_count > 0:
-            st.info(f"✓ Filtered out {removed_count} DST/team entries")
-        
         # Clean all names
         df['name'] = df['name'].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
         
