@@ -1,177 +1,184 @@
 """
 Module 2: Genetic Optimizer
-Enhanced genetic algorithm with multi-objective optimization
+Enhanced genetic algorithm for DFS lineup optimization
+
+Features:
+- Multi-objective fitness function (5 components)
+- Tournament selection with elite preservation
+- Adaptive mutation rates
+- Two-point crossover  
+- Automatic constraint repair
+- Mode-specific weight optimization
 """
 
-import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+import pandas as pd
 import random
+from typing import List, Dict, Tuple, Optional
+from copy import deepcopy
 import logging
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class LineupCandidate:
-    """Represents a candidate lineup in the genetic algorithm"""
-    players: List[str]
-    fitness: float
-    metrics: Dict[str, float]
-
-
 class GeneticOptimizer:
     """
-    Enhanced genetic algorithm for DFS lineup optimization.
+    Enhanced Genetic Algorithm for DFS lineup optimization
     
-    Key Features:
-    - Multi-objective fitness function (5 components)
-    - Adaptive mutation rates
-    - Tournament selection
-    - Elite preservation
-    - Constraint repair (salary, duplicates)
+    Optimizes lineups across multiple objectives:
+    1. Projected Points - raw scoring potential
+    2. Ceiling - upside/tournament winning potential
+    3. Leverage - advantage vs field ownership
+    4. Correlation - stacking quality
+    5. Ownership - contrarian value
     """
     
-    def __init__(
-        self,
-        players_df: pd.DataFrame,
-        opponent_model,
-        stacking_engine,
-        salary_cap: int = 50000
-    ):
+    def __init__(self,
+                 players_df: pd.DataFrame,
+                 opponent_model,
+                 stacking_engine,
+                 salary_cap: int = 50000,
+                 roster_size: int = 9):
         """
-        Initialize genetic optimizer.
+        Initialize genetic optimizer
         
         Args:
             players_df: DataFrame with player data
-            opponent_model: OpponentModel instance
-            stacking_engine: StackingEngine instance
+            opponent_model: OpponentModeler instance for leverage scoring
+            stacking_engine: StackingEngine instance for correlation
             salary_cap: Maximum salary allowed
+            roster_size: Number of players in lineup
         """
-        self.players_df = players_df.copy()
+        self.players_df = players_df
         self.opponent_model = opponent_model
         self.stacking_engine = stacking_engine
         self.salary_cap = salary_cap
+        self.roster_size = roster_size
         
-        # GA parameters
+        # GA Parameters
         self.population_size = 200
         self.generations = 100
+        self.elite_size = 20  # Top 10% preserved
         self.mutation_rate = 0.15
         self.crossover_rate = 0.7
-        self.elite_size = 20
         self.tournament_size = 5
         
-        # Fitness weights (will be adjusted by mode)
+        # Fitness component weights (can be adjusted per mode)
         self.weights = {
-            'projection': 0.30,
-            'ceiling': 0.25,
-            'leverage': 0.25,
-            'correlation': 0.10,
-            'ownership': 0.10
+            'projection': 0.30,    # Base points
+            'ceiling': 0.25,       # Upside potential
+            'leverage': 0.25,      # Field advantage
+            'correlation': 0.10,   # Stacking quality
+            'ownership': 0.10      # Contrarian bonus
         }
         
-        # Evolution tracking
+        # Track evolution statistics
         self.best_fitness_history = []
         self.avg_fitness_history = []
+        self.diversity_history = []
         
-        logger.info("GeneticOptimizer initialized")
+        logger.info(f"GeneticOptimizer initialized: pop={self.population_size}, "
+                   f"gen={self.generations}, roster={self.roster_size}")
     
     def set_mode_weights(self, mode: str):
         """
-        Adjust fitness weights based on optimization mode.
+        Adjust fitness weights based on contest type
         
-        Modes:
-        - CASH: Focus on projection and floor
-        - GPP: Focus on ceiling and leverage
-        - CONTRARIAN: Focus on low ownership
+        Args:
+            mode: One of 'CASH', 'GPP', 'CONTRARIAN', 'BALANCED'
         """
-        if mode == 'CASH':
-            self.weights = {
-                'projection': 0.50,
+        mode_weights = {
+            'CASH': {
+                'projection': 0.50,  # Prioritize floor
                 'ceiling': 0.15,
                 'leverage': 0.10,
                 'correlation': 0.20,
                 'ownership': 0.05
-            }
-        elif mode == 'GPP':
-            self.weights = {
+            },
+            'GPP': {
                 'projection': 0.25,
-                'ceiling': 0.30,
+                'ceiling': 0.30,     # Prioritize ceiling
                 'leverage': 0.25,
                 'correlation': 0.10,
                 'ownership': 0.10
-            }
-        elif mode == 'CONTRARIAN':
-            self.weights = {
+            },
+            'CONTRARIAN': {
                 'projection': 0.20,
                 'ceiling': 0.25,
                 'leverage': 0.20,
                 'correlation': 0.10,
-                'ownership': 0.25
-            }
-        else:  # DEFAULT/BALANCED
-            self.weights = {
+                'ownership': 0.25    # Heavy contrarian
+            },
+            'BALANCED': {
                 'projection': 0.30,
                 'ceiling': 0.25,
                 'leverage': 0.25,
                 'correlation': 0.10,
                 'ownership': 0.10
             }
+        }
         
-        logger.info(f"Mode set to {mode}, weights updated")
+        if mode.upper() in mode_weights:
+            self.weights = mode_weights[mode.upper()]
+            logger.info(f"Weights set to {mode.upper()} mode")
+        else:
+            logger.warning(f"Unknown mode '{mode}', using defaults")
     
-    def evolve(
-        self,
-        target_mode: str = 'GPP',
-        enforce_stack: bool = True,
-        max_ownership: float = None,
-        num_lineups: int = 20
-    ) -> List[Dict]:
+    def evolve(self,
+               target_mode: str = 'GPP',
+               enforce_stacks: bool = True,
+               num_lineups: int = 20,
+               max_ownership: float = 50.0) -> List[Dict]:
         """
-        Run genetic algorithm evolution.
+        Run genetic algorithm evolution to generate optimal lineups
         
         Args:
-            target_mode: Optimization mode (CASH, GPP, CONTRARIAN)
-            enforce_stack: Require QB stacks in lineups
-            max_ownership: Maximum total ownership threshold
-            num_lineups: Number of distinct lineups to generate
-        
+            target_mode: Optimization mode (CASH, GPP, CONTRARIAN, BALANCED)
+            enforce_stacks: Require QB stacks in lineups
+            num_lineups: Number of unique lineups to return
+            max_ownership: Maximum average lineup ownership
+            
         Returns:
-            List of optimized lineups
+            List of optimized lineups with metrics
         """
-        logger.info(f"Starting evolution: {self.generations} generations, population {self.population_size}")
+        logger.info(f"Starting evolution: mode={target_mode}, gen={self.generations}, "
+                   f"pop={self.population_size}")
         
         # Set mode-specific weights
         self.set_mode_weights(target_mode)
         
         # Initialize population
-        population = self._initialize_population(enforce_stack)
+        population = self._initialize_population(enforce_stacks)
         
         # Evolution loop
         for generation in range(self.generations):
-            # Evaluate fitness
-            fitness_scores = [self._calculate_fitness(ind) for ind in population]
+            # Calculate fitness for all individuals
+            fitness_scores = [self._calculate_fitness(lineup) for lineup in population]
             
             # Track statistics
             best_fitness = max(fitness_scores)
             avg_fitness = np.mean(fitness_scores)
+            diversity = self._calculate_diversity(population)
+            
             self.best_fitness_history.append(best_fitness)
             self.avg_fitness_history.append(avg_fitness)
+            self.diversity_history.append(diversity)
             
+            # Log progress
             if generation % 10 == 0:
-                logger.info(f"Generation {generation}: Best={best_fitness:.2f}, Avg={avg_fitness:.2f}")
+                logger.info(f"Gen {generation}: Best={best_fitness:.2f}, "
+                           f"Avg={avg_fitness:.2f}, Diversity={diversity:.2f}")
             
-            # Selection
+            # Selection - Tournament selection
             parents = self._tournament_selection(population, fitness_scores)
             
             # Create next generation
             offspring = []
             
-            # Elite preservation
+            # Elitism - preserve best individuals
             elite_indices = np.argsort(fitness_scores)[-self.elite_size:]
-            elite = [population[i] for i in elite_indices]
-            offspring.extend(elite)
+            elites = [population[i] for i in elite_indices]
+            offspring.extend(elites)
             
             # Generate rest through crossover and mutation
             while len(offspring) < self.population_size:
@@ -190,19 +197,19 @@ class GeneticOptimizer:
                 if random.random() < mutation_rate:
                     child = self._mutate(child)
                 
-                # Repair constraints
-                child = self._repair_lineup(child, enforce_stack)
+                # Repair any constraint violations
+                child = self._repair_lineup(child, enforce_stacks)
                 
                 offspring.append(child)
             
             population = offspring
         
         # Final evaluation
-        final_fitness = [self._calculate_fitness(ind) for ind in population]
+        final_fitness = [self._calculate_fitness(lineup) for lineup in population]
         
-        # Get top diverse lineups
+        # Extract top diverse lineups
         top_lineups = self._extract_diverse_lineups(
-            population,
+            population, 
             final_fitness,
             num_lineups,
             max_ownership
@@ -212,111 +219,149 @@ class GeneticOptimizer:
         
         return top_lineups
     
-    def _initialize_population(self, enforce_stack: bool) -> List[List[str]]:
-        """Create initial random population"""
+    def _initialize_population(self, enforce_stacks: bool) -> List[List[str]]:
+        """
+        Initialize population with random valid lineups
+        
+        Args:
+            enforce_stacks: Whether to require QB stacks
+            
+        Returns:
+            List of lineup (each lineup is list of player names)
+        """
         population = []
-        max_attempts = self.population_size * 10
+        max_attempts = self.population_size * 3
         attempts = 0
         
         while len(population) < self.population_size and attempts < max_attempts:
+            lineup = self._generate_random_lineup(enforce_stacks)
+            
+            if lineup and self._is_valid_lineup(lineup):
+                population.append(lineup)
+            
             attempts += 1
-            
-            # Random lineup
-            lineup = self._generate_random_lineup()
-            
-            # Repair to ensure validity
-            lineup = self._repair_lineup(lineup, enforce_stack)
-            
+        
+        # Fill remaining with basic lineups if needed
+        while len(population) < self.population_size:
+            # Simple greedy approach for filler
+            lineup = self._generate_greedy_lineup()
             if lineup:
                 population.append(lineup)
         
-        # Fill remaining with duplicates if needed
-        while len(population) < self.population_size:
-            population.append(random.choice(population).copy())
-        
-        logger.info(f"Population initialized: {len(population)} individuals")
-        
+        logger.info(f"Initialized population of {len(population)} lineups")
         return population
     
-    def _generate_random_lineup(self) -> List[str]:
+    def _generate_random_lineup(self, enforce_stacks: bool) -> List[str]:
         """Generate a random valid lineup"""
-        # Showdown format: 1 CPT + 5 FLEX
         lineup = []
-        remaining_salary = self.salary_cap
+        available = self.players_df.copy()
         
-        # Select captain (1.5x salary multiplier)
-        available_captains = self.players_df.copy()
-        captain = available_captains.sample(1).iloc[0]
-        lineup.append(captain['name'])
-        remaining_salary -= int(captain['salary'] * 1.5)
+        # If enforcing stacks, start with a QB stack
+        if enforce_stacks:
+            # Pick random QB
+            qbs = available[available['position'] == 'QB']
+            if len(qbs) > 0:
+                qb = qbs.sample(1).iloc[0]
+                lineup.append(qb['player_name'])
+                available = available[available['player_name'] != qb['player_name']]
+                
+                # Add pass catcher from same team
+                pass_catchers = available[
+                    (available['team'] == qb['team']) &
+                    (available['position'].isin(['WR', 'TE']))
+                ]
+                if len(pass_catchers) > 0:
+                    receiver = pass_catchers.sample(1).iloc[0]
+                    lineup.append(receiver['player_name'])
+                    available = available[available['player_name'] != receiver['player_name']]
         
-        # Select 5 flex players
-        for _ in range(5):
-            # Available players not in lineup
-            available = self.players_df[
-                (~self.players_df['name'].isin(lineup)) &
-                (self.players_df['salary'] <= remaining_salary)
-            ]
-            
-            if available.empty:
+        # Fill rest randomly
+        while len(lineup) < self.roster_size and len(available) > 0:
+            # Weight selection by projection
+            weights = available['projection'] / available['projection'].sum()
+            player = available.sample(1, weights=weights).iloc[0]
+            lineup.append(player['player_name'])
+            available = available[available['player_name'] != player['player_name']]
+        
+        return lineup if len(lineup) == self.roster_size else None
+    
+    def _generate_greedy_lineup(self) -> List[str]:
+        """Generate lineup using simple greedy value approach"""
+        lineup = []
+        available = self.players_df.copy()
+        
+        # Calculate value (points per $1000)
+        available['value'] = available['projection'] / (available['salary'] / 1000)
+        available = available.sort_values('value', ascending=False)
+        
+        for _, player in available.iterrows():
+            if len(lineup) >= self.roster_size:
                 break
             
-            # Random selection
-            player = available.sample(1).iloc[0]
-            lineup.append(player['name'])
-            remaining_salary -= player['salary']
+            test_lineup = lineup + [player['player_name']]
+            if self._get_lineup_salary(test_lineup) <= self.salary_cap:
+                lineup.append(player['player_name'])
         
-        return lineup
+        return lineup if len(lineup) == self.roster_size else None
     
     def _calculate_fitness(self, lineup: List[str]) -> float:
         """
-        Calculate multi-objective fitness score.
+        Calculate multi-objective fitness score for a lineup
         
         Components:
-        1. Projection (expected points)
-        2. Ceiling (upside potential)
-        3. Leverage (ceiling/ownership)
-        4. Correlation (stacking bonus)
-        5. Ownership (contrarian value)
-        """
-        lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
+        1. Projection - Expected points
+        2. Ceiling - Upside potential
+        3. Leverage - Field advantage
+        4. Correlation - Stacking quality
+        5. Ownership - Contrarian value
         
-        if lineup_df.empty or len(lineup) != 6:
+        Args:
+            lineup: List of player names
+            
+        Returns:
+            Fitness score (higher is better)
+        """
+        players = self.players_df[self.players_df['player_name'].isin(lineup)]
+        
+        if len(players) == 0:
             return 0.0
         
-        # Component 1: Projection
-        captain_name = lineup[0]
-        captain_proj = lineup_df[lineup_df['name'] == captain_name]['projection'].values[0] * 1.5
-        flex_proj = lineup_df[lineup_df['name'] != captain_name]['projection'].sum()
-        total_projection = captain_proj + flex_proj
-        projection_score = total_projection / 150.0  # Normalize to ~0-1
+        # Component 1: Projection (normalized to 0-100)
+        total_projection = players['projection'].sum()
+        projection_score = min(100, (total_projection / 150) * 100)  # ~150 is top lineup
         
-        # Component 2: Ceiling
-        captain_ceil = lineup_df[lineup_df['name'] == captain_name]['ceiling'].values[0] * 1.5
-        flex_ceil = lineup_df[lineup_df['name'] != captain_name]['ceiling'].sum()
-        total_ceiling = captain_ceil + flex_ceil
-        ceiling_score = total_ceiling / 200.0  # Normalize to ~0-1
+        # Component 2: Ceiling (normalized to 0-100)
+        total_ceiling = players['ceiling'].sum() if 'ceiling' in players.columns else total_projection * 1.3
+        ceiling_score = min(100, (total_ceiling / 200) * 100)  # ~200 is max ceiling
         
-        # Component 3: Leverage
+        # Component 3: Leverage (use opponent model)
         leverage_scores = []
-        for player in lineup:
-            player_data = lineup_df[lineup_df['name'] == player].iloc[0]
-            ceiling = player_data['ceiling']
-            ownership = max(player_data['ownership'], 1.0)  # Avoid division by zero
-            leverage = ceiling / ownership
-            leverage_scores.append(leverage)
-        avg_leverage = np.mean(leverage_scores)
-        leverage_score = min(avg_leverage / 3.0, 1.0)  # Normalize to 0-1
+        for player_name in lineup:
+            player_data = players[players['player_name'] == player_name]
+            if len(player_data) > 0:
+                ownership = player_data['ownership'].iloc[0]
+                projection = player_data['projection'].iloc[0]
+                
+                # Simple leverage: projection / ownership
+                if ownership > 0:
+                    leverage = (projection / ownership) * 10
+                    leverage_scores.append(leverage)
         
-        # Component 4: Correlation
-        correlation = self.stacking_engine.calculate_lineup_correlation(lineup)
-        correlation_score = correlation / 100.0  # Already 0-100, normalize to 0-1
+        leverage_score = np.mean(leverage_scores) if leverage_scores else 50
+        leverage_score = min(100, leverage_score)
         
-        # Component 5: Ownership (lower is better for contrarian)
-        total_ownership = lineup_df['ownership'].sum()
-        ownership_score = 1.0 - (total_ownership / 300.0)  # Inverse, normalize to ~0-1
+        # Component 4: Correlation (use stacking engine)
+        if self.stacking_engine:
+            correlation_score = self.stacking_engine.score_lineup_correlation(lineup)
+        else:
+            correlation_score = 50.0
         
-        # Weighted sum
+        # Component 5: Ownership (contrarian bonus)
+        avg_ownership = players['ownership'].mean() if 'ownership' in players.columns else 15.0
+        # Lower ownership = higher score (inverse relationship)
+        ownership_score = 100 - min(100, avg_ownership * 2)  # 0% own = 100, 50% own = 0
+        
+        # Weighted combination
         fitness = (
             self.weights['projection'] * projection_score +
             self.weights['ceiling'] * ceiling_score +
@@ -325,279 +370,291 @@ class GeneticOptimizer:
             self.weights['ownership'] * ownership_score
         )
         
-        # Bonus for QB stacks
-        if self.stacking_engine._has_qb_stack(lineup, min_size=2):
-            fitness *= 1.05  # 5% bonus
-        
         return fitness
     
-    def _tournament_selection(
-        self,
-        population: List[List[str]],
-        fitness_scores: List[float]
-    ) -> List[List[str]]:
-        """Select parents using tournament selection"""
+    def _tournament_selection(self, population: List[List[str]], 
+                             fitness_scores: List[float]) -> List[List[str]]:
+        """
+        Tournament selection for parent selection
+        
+        Args:
+            population: Current population
+            fitness_scores: Fitness score for each individual
+            
+        Returns:
+            Selected parents
+        """
         parents = []
         
-        for _ in range(len(population) // 2):
-            # Random tournament
+        for _ in range(len(population)):
+            # Select random individuals for tournament
             tournament_indices = random.sample(range(len(population)), self.tournament_size)
             tournament_fitness = [fitness_scores[i] for i in tournament_indices]
             
-            # Select winner
+            # Winner has highest fitness
             winner_idx = tournament_indices[np.argmax(tournament_fitness)]
             parents.append(population[winner_idx])
         
         return parents
     
     def _crossover(self, parent1: List[str], parent2: List[str]) -> List[str]:
-        """Two-point crossover"""
+        """
+        Two-point crossover between two parents
+        
+        Args:
+            parent1: First parent lineup
+            parent2: Second parent lineup
+            
+        Returns:
+            Child lineup
+        """
         if len(parent1) != len(parent2):
             return parent1.copy()
         
-        # Two-point crossover
-        point1 = random.randint(1, len(parent1) - 2)
-        point2 = random.randint(point1 + 1, len(parent1))
+        # Select two random crossover points
+        point1 = random.randint(0, len(parent1) - 1)
+        point2 = random.randint(point1, len(parent1))
         
-        # Create child
-        child = parent1[:point1] + parent2[point1:point2] + parent1[point2:]
+        # Create child with segment from parent1
+        child = parent1[:point1] + parent1[point1:point2] + parent2[point2:]
         
-        # Remove duplicates (keep first occurrence)
+        # Remove duplicates, keeping first occurrence
         seen = set()
         unique_child = []
         for player in child:
             if player not in seen:
-                seen.add(player)
                 unique_child.append(player)
+                seen.add(player)
         
         return unique_child
     
     def _mutate(self, lineup: List[str]) -> List[str]:
-        """Mutate lineup by replacing a random player"""
-        if len(lineup) == 0:
-            return lineup
+        """
+        Mutate lineup by replacing random player
+        
+        Args:
+            lineup: Lineup to mutate
+            
+        Returns:
+            Mutated lineup
+        """
+        mutated = lineup.copy()
+        
+        if len(mutated) == 0:
+            return mutated
         
         # Select random position to mutate
-        mutate_idx = random.randint(0, len(lineup) - 1)
+        mutation_idx = random.randint(0, len(mutated) - 1)
         
-        # Get available replacements
-        available = self.players_df[~self.players_df['name'].isin(lineup)]
+        # Find replacement candidates
+        current_players = set(mutated)
+        available = self.players_df[
+            ~self.players_df['player_name'].isin(current_players)
+        ]
         
-        if available.empty:
-            return lineup
+        if len(available) > 0:
+            # Weight by projection
+            weights = available['projection'] / available['projection'].sum()
+            replacement = available.sample(1, weights=weights).iloc[0]
+            mutated[mutation_idx] = replacement['player_name']
         
-        # Weighted selection (higher projection = higher chance)
-        weights = available['projection'].values
-        weights = weights / weights.sum()
-        
-        # Select replacement
-        replacement = np.random.choice(available['name'].values, p=weights)
-        
-        # Create new lineup
-        new_lineup = lineup.copy()
-        new_lineup[mutate_idx] = replacement
-        
-        return new_lineup
+        return mutated
     
     def _adaptive_mutation_rate(self, generation: int) -> float:
-        """Decrease mutation rate as evolution progresses"""
+        """
+        Calculate adaptive mutation rate that decreases over generations
+        
+        Args:
+            generation: Current generation number
+            
+        Returns:
+            Mutation rate for this generation
+        """
+        # Start high, decrease to 50% of initial rate by end
         progress = generation / self.generations
-        return self.mutation_rate * (1.0 - 0.5 * progress)  # Reduce by 50% over time
+        adaptive_rate = self.mutation_rate * (1 - 0.5 * progress)
+        return adaptive_rate
     
-    def _repair_lineup(
-        self,
-        lineup: List[str],
-        enforce_stack: bool
-    ) -> Optional[List[str]]:
+    def _repair_lineup(self, lineup: List[str], enforce_stacks: bool) -> List[str]:
         """
-        Repair lineup to satisfy constraints.
+        Repair lineup to satisfy all constraints
         
-        Constraints:
-        - Exactly 6 players
-        - No duplicates
-        - Under salary cap
-        - Has QB stack (if enforced)
+        Args:
+            lineup: Potentially invalid lineup
+            enforce_stacks: Whether to enforce stacking
+            
+        Returns:
+            Valid lineup
         """
-        if not lineup:
-            return None
-        
         # Remove duplicates
         lineup = list(dict.fromkeys(lineup))
         
-        # Ensure 6 players
+        # Fill to correct size
         max_attempts = 50
         attempts = 0
         
-        while len(lineup) < 6 and attempts < max_attempts:
-            attempts += 1
-            
-            # Get current salary
-            lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-            captain_salary = lineup_df.iloc[0]['salary'] * 1.5 if len(lineup) > 0 else 0
-            flex_salary = lineup_df.iloc[1:]['salary'].sum() if len(lineup) > 1 else 0
-            current_salary = captain_salary + flex_salary
-            remaining_salary = self.salary_cap - current_salary
-            
-            # Add affordable player
+        while len(lineup) < self.roster_size and attempts < max_attempts:
             available = self.players_df[
-                (~self.players_df['name'].isin(lineup)) &
-                (self.players_df['salary'] <= remaining_salary)
+                ~self.players_df['player_name'].isin(lineup)
             ]
             
-            if available.empty:
+            if len(available) == 0:
                 break
             
-            # Weighted selection
-            weights = available['projection'].values
-            if weights.sum() > 0:
-                weights = weights / weights.sum()
-                new_player = np.random.choice(available['name'].values, p=weights)
-                lineup.append(new_player)
-        
-        # Check salary constraint
-        if len(lineup) == 6:
-            lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-            captain_salary = lineup_df.iloc[0]['salary'] * 1.5
-            flex_salary = lineup_df.iloc[1:]['salary'].sum()
-            total_salary = captain_salary + flex_salary
+            # Add player that fits under salary cap
+            current_salary = self._get_lineup_salary(lineup)
+            remaining = self.salary_cap - current_salary
             
-            if total_salary > self.salary_cap:
-                return None
+            affordable = available[available['salary'] <= remaining]
+            
+            if len(affordable) > 0:
+                weights = affordable['projection'] / affordable['projection'].sum()
+                new_player = affordable.sample(1, weights=weights).iloc[0]
+                lineup.append(new_player['player_name'])
+            else:
+                break
+            
+            attempts += 1
         
-        # Check stack constraint
-        if enforce_stack and len(lineup) == 6:
-            if not self.stacking_engine._has_qb_stack(lineup, min_size=2):
-                # Try to add QB stack
-                lineup = self._add_qb_stack(lineup)
-        
-        return lineup if len(lineup) == 6 else None
-    
-    def _add_qb_stack(self, lineup: List[str]) -> List[str]:
-        """Try to modify lineup to include QB stack"""
-        lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-        
-        # Find QBs in lineup
-        qbs = lineup_df[lineup_df['position'] == 'QB']
-        
-        if qbs.empty:
-            # Add a QB
-            qb_available = self.players_df[
-                (self.players_df['position'] == 'QB') &
-                (~self.players_df['name'].isin(lineup))
+        # Adjust if over salary cap
+        attempts = 0
+        while self._get_lineup_salary(lineup) > self.salary_cap and attempts < max_attempts:
+            # Remove most expensive player and replace with cheaper
+            players = self.players_df[self.players_df['player_name'].isin(lineup)]
+            
+            if len(players) == 0:
+                break
+            
+            most_expensive = players.nlargest(1, 'salary').iloc[0]
+            lineup.remove(most_expensive['player_name'])
+            
+            # Add cheaper replacement
+            available = self.players_df[
+                (~self.players_df['player_name'].isin(lineup)) &
+                (self.players_df['salary'] < most_expensive['salary'])
             ]
             
-            if not qb_available.empty:
-                # Replace lowest projection player with QB
-                lowest_proj_idx = lineup_df['projection'].idxmin()
-                lowest_player = lineup_df.loc[lowest_proj_idx, 'name']
-                
-                best_qb = qb_available.nlargest(1, 'projection').iloc[0]
-                lineup = [best_qb['name'] if p == lowest_player else p for p in lineup]
-                
-                lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-                qbs = lineup_df[lineup_df['position'] == 'QB']
+            if len(available) > 0:
+                replacement = available.sample(1).iloc[0]
+                lineup.append(replacement['player_name'])
+            
+            attempts += 1
         
-        # Add pass-catcher from same team
-        if not qbs.empty:
-            qb = qbs.iloc[0]
-            
-            # Find pass-catchers from QB's team
-            pass_catchers = self.players_df[
-                (self.players_df['team'] == qb['team']) &
-                (self.players_df['position'].isin(['WR', 'TE'])) &
-                (~self.players_df['name'].isin(lineup))
-            ]
-            
-            if not pass_catchers.empty:
-                # Replace lowest projection player with pass-catcher
-                non_qb_lineup = lineup_df[lineup_df['position'] != 'QB']
-                if not non_qb_lineup.empty:
-                    lowest_proj_idx = non_qb_lineup['projection'].idxmin()
-                    lowest_player = non_qb_lineup.loc[lowest_proj_idx, 'name']
-                    
-                    best_catcher = pass_catchers.nlargest(1, 'projection').iloc[0]
-                    lineup = [best_catcher['name'] if p == lowest_player else p for p in lineup]
+        # Trim to correct size
+        lineup = lineup[:self.roster_size]
         
         return lineup
     
-    def _extract_diverse_lineups(
-        self,
-        population: List[List[str]],
-        fitness_scores: List[float],
-        num_lineups: int,
-        max_ownership: float
-    ) -> List[Dict]:
-        """Extract top diverse lineups from population"""
+    def _is_valid_lineup(self, lineup: List[str]) -> bool:
+        """Check if lineup satisfies all constraints"""
+        if len(lineup) != self.roster_size:
+            return False
+        
+        # Check no duplicates
+        if len(set(lineup)) != len(lineup):
+            return False
+        
+        # Check salary cap
+        salary = self._get_lineup_salary(lineup)
+        if salary > self.salary_cap:
+            return False
+        
+        return True
+    
+    def _get_lineup_salary(self, lineup: List[str]) -> int:
+        """Calculate total salary for a lineup"""
+        players = self.players_df[self.players_df['player_name'].isin(lineup)]
+        return players['salary'].sum()
+    
+    def _calculate_diversity(self, population: List[List[str]]) -> float:
+        """
+        Calculate population diversity (0-100 scale)
+        Higher diversity = more different lineups
+        
+        Args:
+            population: List of lineups
+            
+        Returns:
+            Diversity score
+        """
+        if len(population) < 2:
+            return 0.0
+        
+        # Count unique players across population
+        all_players = set()
+        for lineup in population:
+            all_players.update(lineup)
+        
+        # Diversity = unique players / total player slots
+        total_slots = len(population) * self.roster_size
+        diversity = (len(all_players) / min(total_slots, len(self.players_df))) * 100
+        
+        return min(100, diversity)
+    
+    def _extract_diverse_lineups(self,
+                                 population: List[List[str]],
+                                 fitness_scores: List[float],
+                                 num_lineups: int,
+                                 max_ownership: float) -> List[Dict]:
+        """
+        Extract top diverse lineups from final population
+        
+        Args:
+            population: Final population
+            fitness_scores: Fitness scores
+            num_lineups: Number of lineups to extract
+            max_ownership: Maximum average ownership
+            
+        Returns:
+            List of lineup dictionaries with full metrics
+        """
         # Sort by fitness
         sorted_indices = np.argsort(fitness_scores)[::-1]
         
-        diverse_lineups = []
-        used_players = set()
+        selected_lineups = []
+        selected_players = set()
         
         for idx in sorted_indices:
-            if len(diverse_lineups) >= num_lineups:
+            if len(selected_lineups) >= num_lineups:
                 break
             
             lineup = population[idx]
             
             # Check ownership constraint
-            if max_ownership:
-                lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-                total_ownership = lineup_df['ownership'].sum()
-                
-                if total_ownership > max_ownership:
-                    continue
+            players = self.players_df[self.players_df['player_name'].isin(lineup)]
+            avg_own = players['ownership'].mean() if 'ownership' in players.columns else 15.0
             
-            # Check diversity (at least 3 different players from previous lineups)
-            is_diverse = True
-            for prev_lineup in diverse_lineups:
-                overlap = len(set(lineup) & set(prev_lineup['players']))
-                if overlap > 3:  # More than 3 shared players
-                    is_diverse = False
-                    break
+            if avg_own > max_ownership:
+                continue
             
-            if is_diverse:
-                # Calculate metrics
-                lineup_df = self.players_df[self.players_df['name'].isin(lineup)]
-                
-                captain_name = lineup[0]
-                captain_data = lineup_df[lineup_df['name'] == captain_name].iloc[0]
-                
-                captain_proj = captain_data['projection'] * 1.5
-                flex_proj = lineup_df[lineup_df['name'] != captain_name]['projection'].sum()
-                total_proj = captain_proj + flex_proj
-                
-                captain_ceil = captain_data['ceiling'] * 1.5
-                flex_ceil = lineup_df[lineup_df['name'] != captain_name]['ceiling'].sum()
-                total_ceil = captain_ceil + flex_ceil
-                
-                total_ownership = lineup_df['ownership'].sum()
-                
-                captain_salary = captain_data['salary'] * 1.5
-                flex_salary = lineup_df[lineup_df['name'] != captain_name]['salary'].sum()
-                total_salary = captain_salary + flex_salary
-                
-                correlation = self.stacking_engine.calculate_lineup_correlation(lineup)
-                
-                diverse_lineups.append({
-                    'players': lineup,
-                    'fitness': fitness_scores[idx],
-                    'metrics': {
-                        'total_projection': float(total_proj),
-                        'total_ceiling': float(total_ceil),
-                        'total_ownership': float(total_ownership),
-                        'total_salary': int(total_salary),
-                        'correlation': float(correlation)
-                    },
-                    'captain': captain_name
-                })
+            # Check diversity (don't add if too similar to existing)
+            overlap = len(set(lineup) & selected_players)
+            if overlap > self.roster_size * 0.6 and len(selected_lineups) > 0:
+                continue  # Skip if >60% overlap with already selected
+            
+            # Add lineup
+            lineup_dict = self._create_lineup_dict(lineup, fitness_scores[idx])
+            selected_lineups.append(lineup_dict)
+            selected_players.update(lineup)
         
-        logger.info(f"Extracted {len(diverse_lineups)} diverse lineups")
+        return selected_lineups
+    
+    def _create_lineup_dict(self, lineup: List[str], fitness: float) -> Dict:
+        """Create detailed lineup dictionary"""
+        players = self.players_df[self.players_df['player_name'].isin(lineup)]
         
-        return diverse_lineups
+        return {
+            'players': players.to_dict('records'),
+            'total_salary': players['salary'].sum(),
+            'total_projection': players['projection'].sum(),
+            'total_ceiling': players['ceiling'].sum() if 'ceiling' in players.columns else players['projection'].sum() * 1.3,
+            'avg_ownership': players['ownership'].mean() if 'ownership' in players.columns else 15.0,
+            'fitness_score': fitness,
+            'correlation_score': self.stacking_engine.score_lineup_correlation(lineup) if self.stacking_engine else 0.0
+        }
     
     def get_evolution_stats(self) -> Dict:
-        """Get statistics about the evolution process"""
+        """Get statistics from evolution run"""
         if not self.best_fitness_history:
             return {}
         
@@ -605,7 +662,11 @@ class GeneticOptimizer:
             'initial_fitness': self.best_fitness_history[0],
             'final_fitness': self.best_fitness_history[-1],
             'improvement': self.best_fitness_history[-1] - self.best_fitness_history[0],
-            'improvement_pct': ((self.best_fitness_history[-1] / self.best_fitness_history[0]) - 1) * 100,
-            'avg_final': self.avg_fitness_history[-1],
-            'generations': len(self.best_fitness_history)
+            'improvement_pct': ((self.best_fitness_history[-1] - self.best_fitness_history[0]) / 
+                               self.best_fitness_history[0] * 100) if self.best_fitness_history[0] > 0 else 0,
+            'generations': self.generations,
+            'population_size': self.population_size,
+            'final_diversity': self.diversity_history[-1] if self.diversity_history else 0,
+            'fitness_history': self.best_fitness_history,
+            'diversity_history': self.diversity_history
         }
