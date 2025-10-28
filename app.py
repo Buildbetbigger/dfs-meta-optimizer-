@@ -1,29 +1,41 @@
 """
-DFS Meta-Optimizer - Streamlit Application
+DFS Meta-Optimizer - Main Streamlit Application
+Version 5.0.0
 
-A revolutionary DFS optimizer that maximizes competitive advantage
-rather than just projected points.
+Revolutionary DFS optimizer that maximizes competitive advantage through:
+- Opponent modeling and leverage scoring
+- AI-powered ownership prediction
+- Advanced optimization algorithms
+- Real-time strategic analysis
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 import sys
-import traceback
+import os
 
-# Import modules
+# Add modules to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 try:
-    from modules.optimization_engine import LineupOptimizer
     from modules.opponent_modeling import OpponentModeler
+    from modules.optimization_engine import LineupOptimizer
     from modules.ai_assistant import AIAssistant
-    from settings import OPTIMIZATION_MODES
+    from config.settings import (
+        SALARY_CAP, ROSTER_SIZE, OPTIMIZATION_MODES,
+        ENABLE_CLAUDE_AI, AI_OWNERSHIP_PREDICTION,
+        HIGH_OWNERSHIP_THRESHOLD, LOW_OWNERSHIP_THRESHOLD
+    )
 except ImportError as e:
-    st.error(f"❌ Import Error: {e}")
-    st.info("Make sure all module files are in the 'modules/' directory")
+    st.error(f"❌ Module Import Error: {e}")
+    st.info("Ensure all module files exist in the correct directories")
     st.stop()
 
-# Page config
+# Page configuration
 st.set_page_config(
     page_title="DFS Meta-Optimizer",
     page_icon="🎯",
@@ -49,246 +61,186 @@ st.markdown("""
     }
     .metric-card {
         background-color: #f0f2f6;
-        padding: 1rem;
+        padding: 1.5rem;
         border-radius: 0.5rem;
         margin: 0.5rem 0;
     }
+    .leverage-high {
+        background-color: #d4edda;
+        padding: 0.3rem;
+        border-radius: 0.3rem;
+    }
+    .leverage-low {
+        background-color: #f8d7da;
+        padding: 0.3rem;
+        border-radius: 0.3rem;
+    }
+    .chalk-player {
+        background-color: #fff3cd;
+        padding: 0.3rem;
+        border-radius: 0.3rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'players_df' not in st.session_state:
+        st.session_state.players_df = None
+    if 'opponent_model' not in st.session_state:
+        st.session_state.opponent_model = None
+    if 'optimizer' not in st.session_state:
+        st.session_state.optimizer = None
+    if 'ai_assistant' not in st.session_state:
+        if ENABLE_CLAUDE_AI:
+            st.session_state.ai_assistant = AIAssistant()
+        else:
+            st.session_state.ai_assistant = None
+    if 'generated_lineups' not in st.session_state:
+        st.session_state.generated_lineups = []
+    if 'optimization_history' not in st.session_state:
+        st.session_state.optimization_history = []
+
 
 def clean_player_name(name):
     """Clean player name for consistent matching"""
     if pd.isna(name):
         return ""
-    return str(name).strip().lower()
+    # Strip whitespace and convert to lowercase
+    cleaned = str(name).strip().lower()
+    # Remove extra whitespace between names
+    cleaned = ' '.join(cleaned.split())
+    return cleaned
 
-def load_player_data(uploaded_file):
-    """Load and process player data with robust CSV handling"""
+
+def process_csv(df):
+    """
+    Process uploaded CSV into standardized format
+    Handles both single 'name' column and separate first_name/last_name columns
+    """
     try:
-        df = pd.read_csv(uploaded_file)
+        # Create a clean copy
+        processed = df.copy()
         
-        # Clean column names
-        df.columns = df.columns.str.strip().str.lower()
+        # Standardize column names
+        processed.columns = processed.columns.str.strip().str.lower()
         
-        # Handle first_name/last_name columns if present
-        if 'first_name' in df.columns and 'last_name' in df.columns:
-            df['name'] = df['first_name'].fillna('').astype(str).str.strip() + ' ' + \
-                         df['last_name'].fillna('').astype(str).str.strip()
-            df['name'] = df['name'].str.strip()
-        elif 'name' not in df.columns:
-            st.error("❌ CSV must have either 'name' column or 'first_name' and 'last_name' columns")
+        # Handle name columns
+        if 'name' in processed.columns:
+            # Single name column - split it
+            name_parts = processed['name'].str.strip().str.split(n=1, expand=True)
+            processed['first_name'] = name_parts[0] if len(name_parts.columns) > 0 else ''
+            processed['last_name'] = name_parts[1] if len(name_parts.columns) > 1 else ''
+        elif 'first_name' in processed.columns and 'last_name' in processed.columns:
+            # Already has separate columns
+            processed['first_name'] = processed['first_name'].fillna('').str.strip()
+            processed['last_name'] = processed['last_name'].fillna('').str.strip()
+        else:
+            st.error("❌ CSV must have either 'name' column OR 'first_name' and 'last_name' columns")
             return None
         
-        # Filter out DST entries (Defense/Special Teams)
-        if 'position' in df.columns:
-            original_count = len(df)
-            df = df[df['position'].str.upper() != 'DST'].copy()
-            dst_filtered = original_count - len(df)
-            if dst_filtered > 0:
-                st.info(f"ℹ️ Filtered out {dst_filtered} DST entries")
+        # Create full name for display
+        processed['player_name'] = (
+            processed['first_name'].str.strip() + ' ' + 
+            processed['last_name'].str.strip()
+        ).str.strip()
+        
+        # Create clean name for matching
+        processed['clean_name'] = processed['player_name'].apply(clean_player_name)
         
         # Required columns
-        required = ['name', 'team', 'position', 'salary', 'projection']
-        missing = [col for col in required if col not in df.columns]
+        required_cols = ['position', 'team', 'salary', 'projection']
         
+        # Check for required columns
+        missing = [col for col in required_cols if col not in processed.columns]
         if missing:
             st.error(f"❌ Missing required columns: {', '.join(missing)}")
-            st.info("Required columns: name, team, position, salary, projection")
+            st.info("Required: position, team, salary, projection")
             return None
         
-        # Convert to numeric
-        df['salary'] = pd.to_numeric(df['salary'], errors='coerce')
-        df['projection'] = pd.to_numeric(df['projection'], errors='coerce')
+        # Convert data types
+        processed['salary'] = pd.to_numeric(processed['salary'], errors='coerce')
+        processed['projection'] = pd.to_numeric(processed['projection'], errors='coerce')
         
-        # Remove rows with invalid data
-        df = df.dropna(subset=['name', 'salary', 'projection'])
-        df = df[df['salary'] > 0]
-        df = df[df['projection'] > 0]
-        
-        # Calculate ceiling and floor if not present
-        if 'ceiling' not in df.columns:
-            df['ceiling'] = df['projection'] * 1.4
+        # Add derived columns if missing
+        if 'ceiling' not in processed.columns:
+            processed['ceiling'] = processed['projection'] * 1.3
         else:
-            df['ceiling'] = pd.to_numeric(df['ceiling'], errors='coerce').fillna(df['projection'] * 1.4)
+            processed['ceiling'] = pd.to_numeric(processed['ceiling'], errors='coerce')
             
-        if 'floor' not in df.columns:
-            df['floor'] = df['projection'] * 0.7
+        if 'floor' not in processed.columns:
+            processed['floor'] = processed['projection'] * 0.7
         else:
-            df['floor'] = pd.to_numeric(df['floor'], errors='coerce').fillna(df['projection'] * 0.7)
-        
-        # Add ownership if not present (will be updated by AI if enabled)
-        if 'ownership' not in df.columns:
-            df['ownership'] = 15.0  # Default placeholder
+            processed['floor'] = pd.to_numeric(processed['floor'], errors='coerce')
+            
+        if 'ownership' not in processed.columns:
+            processed['ownership'] = 15.0  # Default 15%
         else:
-            df['ownership'] = pd.to_numeric(df['ownership'], errors='coerce').fillna(15.0)
+            processed['ownership'] = pd.to_numeric(processed['ownership'], errors='coerce')
         
-        # Clean all text fields
-        df['name'] = df['name'].astype(str).str.strip()
-        df['team'] = df['team'].astype(str).str.strip()
-        df['position'] = df['position'].astype(str).str.strip().str.upper()
+        # Clean data
+        processed = processed.dropna(subset=['player_name', 'salary', 'projection'])
+        processed = processed[processed['salary'] > 0]
+        processed = processed[processed['projection'] > 0]
         
-        # Remove any duplicate names (keep first occurrence)
-        df = df.drop_duplicates(subset=['name'], keep='first')
+        # Calculate value
+        processed['value'] = processed['projection'] / (processed['salary'] / 1000)
         
-        st.success(f"✅ Loaded {len(df)} players successfully")
+        return processed
+        
+    except Exception as e:
+        st.error(f"❌ Error processing CSV: {str(e)}")
+        return None
+
+
+def predict_ownership_ai(df):
+    """Use Claude AI to predict player ownership percentages"""
+    if not ENABLE_CLAUDE_AI or not st.session_state.ai_assistant:
+        st.warning("⚠️ Claude AI not available - using default 15% ownership")
+        return df
+    
+    try:
+        with st.spinner("🤖 AI analyzing field ownership..."):
+            # Prepare player list for AI
+            player_data = df[['player_name', 'position', 'salary', 'projection']].to_dict('records')
+            
+            # Get predictions from AI
+            ownership_dict = st.session_state.ai_assistant.predict_ownership(player_data)
+            
+            if ownership_dict and len(ownership_dict) > 0:
+                # Update ownership in dataframe using clean names
+                for clean_name, ownership in ownership_dict.items():
+                    mask = df['clean_name'] == clean_name
+                    if mask.any():
+                        df.loc[mask, 'ownership'] = ownership
+                
+                st.success(f"✅ AI predicted ownership for {len(ownership_dict)} players")
+                
+                # Show distribution
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Avg Ownership", f"{df['ownership'].mean():.1f}%")
+                with col2:
+                    st.metric("Min Ownership", f"{df['ownership'].min():.1f}%")
+                with col3:
+                    st.metric("Max Ownership", f"{df['ownership'].max():.1f}%")
+            else:
+                st.warning("⚠️ AI prediction returned no results - using defaults")
         
         return df
         
     except Exception as e:
-        st.error(f"❌ Error loading CSV: {str(e)}")
-        st.code(traceback.format_exc())
-        return None
+        st.warning(f"⚠️ AI prediction failed: {str(e)}")
+        st.info("Using default 15% ownership for all players")
+        return df
 
-def display_lineup(lineup_df, lineup_num):
-    """Display a single lineup with formatting"""
-    st.markdown(f"### Lineup #{lineup_num}")
-    
-    # Format the display
-    display_df = lineup_df[['name', 'team', 'position', 'salary', 'projection', 'ownership']].copy()
-    display_df.columns = ['Player', 'Team', 'Pos', 'Salary', 'Proj', 'Own%']
-    display_df['Salary'] = display_df['Salary'].apply(lambda x: f"${x:,.0f}")
-    display_df['Proj'] = display_df['Proj'].apply(lambda x: f"{x:.1f}")
-    display_df['Own%'] = display_df['Own%'].apply(lambda x: f"{x:.1f}%")
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+def display_player_pool(df):
+    """Display the processed player pool with statistics"""
+    st.subheader("📊 Player Pool")
     
     # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        total_salary = lineup_df['salary'].sum()
-        pct = (total_salary / 50000) * 100
-        st.metric("Total Salary", f"${total_salary:,.0f}", f"{pct:.1f}%")
-    with col2:
-        total_proj = lineup_df['projection'].sum()
-        st.metric("Total Projection", f"{total_proj:.1f}")
-    with col3:
-        avg_own = lineup_df['ownership'].mean()
-        st.metric("Avg Ownership", f"{avg_own:.1f}%")
-    with col4:
-        leverage = lineup_df['ceiling'].sum() / max(avg_own, 0.1)
-        st.metric("Leverage Score", f"{leverage:.1f}")
-
-def main():
-    # Header
-    st.markdown('<div class="main-header">🎯 DFS Meta-Optimizer</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Beat the field, not just the slate</div>', unsafe_allow_html=True)
-    
-    # Sidebar configuration
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # File upload
-        st.subheader("1. Upload Player Data")
-        uploaded_file = st.file_uploader(
-            "Upload CSV file",
-            type=['csv'],
-            help="CSV must include: name, team, position, salary, projection"
-        )
-        
-        if uploaded_file:
-            if 'player_data' not in st.session_state or st.session_state.get('last_upload') != uploaded_file.name:
-                with st.spinner("Loading player data..."):
-                    df = load_player_data(uploaded_file)
-                    if df is not None:
-                        st.session_state.player_data = df
-                        st.session_state.last_upload = uploaded_file.name
-                        st.rerun()
-        
-        # Optimization settings
-        if 'player_data' in st.session_state:
-            st.subheader("2. Optimization Mode")
-            
-            mode = st.selectbox(
-                "Select Mode",
-                options=list(OPTIMIZATION_MODES.keys()),
-                format_func=lambda x: f"{x.title()} - {OPTIMIZATION_MODES[x].get('description', '')[:30]}..."
-            )
-            
-            st.subheader("3. Lineup Settings")
-            
-            num_lineups = st.slider("Number of Lineups", 1, 150, 20)
-            
-            diversity = st.slider(
-                "Diversity Factor",
-                0.0, 1.0, 0.3,
-                help="Higher = more unique lineups"
-            )
-            
-            min_salary_pct = st.slider(
-                "Min Salary Usage %",
-                90, 100, 98,
-                help="Minimum percentage of salary cap to use"
-            )
-            
-            st.subheader("4. AI Features")
-            
-            use_ai = st.checkbox(
-                "Enable AI Ownership Prediction",
-                value=False,
-                help="Uses Claude API to predict ownership (costs ~$0.30 per run)"
-            )
-            
-            if use_ai:
-                api_key = st.text_input(
-                    "Anthropic API Key",
-                    type="password",
-                    value=st.secrets.get("ANTHROPIC_API_KEY", ""),
-                    help="Get your API key from console.anthropic.com"
-                )
-                if api_key:
-                    st.session_state.anthropic_api_key = api_key
-            
-            # Generate button
-            st.markdown("---")
-            generate_btn = st.button("🚀 Generate Lineups", type="primary", use_container_width=True)
-        else:
-            generate_btn = False
-            st.info("👆 Upload player data to begin")
-    
-    # Main content area
-    if 'player_data' not in st.session_state:
-        # Welcome screen
-        st.info("👈 Upload your player data CSV to get started")
-        
-        with st.expander("📋 CSV Format Requirements"):
-            st.markdown("""
-            **Required columns:**
-            - `name` (or `first_name` + `last_name`)
-            - `team`
-            - `position`
-            - `salary`
-            - `projection`
-            
-            **Optional columns:**
-            - `ceiling` (auto-calculated if missing)
-            - `floor` (auto-calculated if missing)
-            - `ownership` (can be predicted by AI)
-            
-            **Example:**
-            ```
-            name,team,position,salary,projection
-            Patrick Mahomes,KC,QB,8500,24.5
-            Travis Kelce,KC,TE,7800,18.2
-            ```
-            """)
-        
-        with st.expander("🎯 How It Works"):
-            st.markdown("""
-            This optimizer uses **opponent modeling** and **leverage scoring** to build lineups 
-            that maximize your competitive advantage:
-            
-            1. **Leverage Analysis**: Identifies high-ceiling plays with low ownership
-            2. **Opponent Modeling**: Predicts what the field will do
-            3. **Smart Diversification**: Creates unique lineups that complement each other
-            4. **AI Integration**: Optional AI-powered ownership prediction
-            
-            **Not just another points optimizer** - this tool helps you beat the field!
-            """)
-        return
-    
-    # Show player data summary
-    df = st.session_state.player_data
-    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Players", len(df))
@@ -297,155 +249,354 @@ def main():
     with col3:
         st.metric("Avg Projection", f"{df['projection'].mean():.1f}")
     with col4:
-        positions = df['position'].nunique()
-        st.metric("Positions", positions)
+        st.metric("Avg Value", f"{df['value'].mean():.2f}")
     
-    # Generate lineups
-    if generate_btn:
-        with st.spinner("🧬 Generating optimized lineups..."):
-            try:
-                # Initialize AI if enabled
-                if use_ai and 'anthropic_api_key' in st.session_state:
-                    st.info("🤖 Running AI ownership prediction...")
-                    ai_assistant = AIAssistant(st.session_state.anthropic_api_key)
-                    
-                    # Get AI predictions
-                    ownership_predictions = ai_assistant.predict_ownership(df)
-                    
-                    # Update ownership in dataframe
-                    for player_name, predicted_own in ownership_predictions.items():
-                        mask = df['name'].str.lower() == player_name.lower()
-                        if mask.any():
-                            df.loc[mask, 'ownership'] = predicted_own
-                    
-                    st.success(f"✅ AI updated ownership for {len(ownership_predictions)} players")
-                    st.session_state.player_data = df
-                
-                # Initialize opponent modeler
-                opponent_modeler = OpponentModeler(df)
-                
-                # Calculate leverage scores
-                df = opponent_modeler.calculate_leverage_scores(df)
-                st.session_state.player_data = df
-                
-                # Initialize optimizer
+    # Filters
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        position_filter = st.multiselect(
+            "Filter by Position",
+            options=sorted(df['position'].unique()),
+            default=sorted(df['position'].unique())
+        )
+    
+    with col2:
+        team_filter = st.multiselect(
+            "Filter by Team",
+            options=sorted(df['team'].unique()),
+            default=sorted(df['team'].unique())
+        )
+    
+    # Apply filters
+    filtered_df = df[
+        (df['position'].isin(position_filter)) &
+        (df['team'].isin(team_filter))
+    ]
+    
+    # Display dataframe
+    display_cols = ['player_name', 'position', 'team', 'salary', 'projection', 
+                    'ceiling', 'floor', 'ownership', 'value']
+    
+    st.dataframe(
+        filtered_df[display_cols].sort_values('projection', ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    return filtered_df
+
+
+def run_opponent_modeling(df):
+    """Run opponent modeling analysis"""
+    st.subheader("🎯 Opponent Modeling Analysis")
+    
+    try:
+        with st.spinner("Analyzing field construction patterns..."):
+            # Create opponent modeler
+            modeler = OpponentModeler(df)
+            st.session_state.opponent_model = modeler
+            
+            # Calculate metrics
+            chalk_players = modeler.identify_chalk_plays()
+            leverage_plays = modeler.identify_leverage_opportunities()
+            
+            # Display results
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 🔥 Chalk Plays (High Ownership)")
+                if len(chalk_players) > 0:
+                    for _, player in chalk_players.head(10).iterrows():
+                        st.markdown(
+                            f"<div class='chalk-player'>"
+                            f"**{player['player_name']}** ({player['position']}) - "
+                            f"${player['salary']:,} | {player['ownership']:.1f}% owned"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.info("No high-ownership players identified")
+            
+            with col2:
+                st.markdown("#### 💎 Leverage Opportunities")
+                if len(leverage_plays) > 0:
+                    for _, player in leverage_plays.head(10).iterrows():
+                        leverage_score = player.get('leverage_score', 0)
+                        st.markdown(
+                            f"<div class='leverage-high'>"
+                            f"**{player['player_name']}** ({player['position']}) - "
+                            f"${player['salary']:,} | Leverage: {leverage_score:.2f}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.info("No leverage opportunities identified")
+            
+            # Visualization
+            st.markdown("---")
+            st.markdown("#### 📈 Ownership vs Value")
+            
+            fig = px.scatter(
+                df,
+                x='value',
+                y='ownership',
+                size='projection',
+                color='position',
+                hover_data=['player_name', 'salary', 'projection'],
+                title="Player Value vs Expected Ownership",
+                labels={'value': 'Value (Proj/1K)', 'ownership': 'Ownership %'}
+            )
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.success("✅ Opponent modeling complete!")
+            return True
+            
+    except Exception as e:
+        st.error(f"❌ Error in opponent modeling: {str(e)}")
+        return False
+
+
+def generate_lineups_section(df):
+    """Lineup generation section"""
+    st.subheader("🚀 Generate Lineups")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        mode = st.selectbox(
+            "Optimization Mode",
+            options=list(OPTIMIZATION_MODES.keys()),
+            format_func=lambda x: x.title()
+        )
+    
+    with col2:
+        num_lineups = st.number_input(
+            "Number of Lineups",
+            min_value=1,
+            max_value=20,
+            value=3
+        )
+    
+    with col3:
+        uniqueness = st.slider(
+            "Uniqueness",
+            min_value=1,
+            max_value=9,
+            value=5,
+            help="Higher = more different lineups"
+        )
+    
+    # Advanced options
+    with st.expander("⚙️ Advanced Options"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            max_exposure = st.slider(
+                "Max Player Exposure %",
+                min_value=10,
+                max_value=100,
+                value=50,
+                step=10
+            ) / 100.0
+        
+        with col2:
+            min_salary_pct = st.slider(
+                "Min Salary Usage %",
+                min_value=90,
+                max_value=100,
+                value=96
+            ) / 100.0
+    
+    if st.button("🎯 Generate Lineups", type="primary", use_container_width=True):
+        if df is None or len(df) == 0:
+            st.error("❌ No player data available!")
+            return
+        
+        try:
+            with st.spinner(f"Generating {num_lineups} {mode} lineups..."):
+                # Create optimizer
                 optimizer = LineupOptimizer(
                     df,
-                    opponent_modeler,
-                    mode_config=OPTIMIZATION_MODES[mode]
+                    mode=mode,
+                    opponent_model=st.session_state.opponent_model
                 )
+                st.session_state.optimizer = optimizer
                 
                 # Generate lineups
                 lineups = optimizer.generate_lineups(
                     num_lineups=num_lineups,
-                    diversity_factor=diversity,
-                    min_salary_pct=min_salary_pct / 100
+                    uniqueness=uniqueness,
+                    max_exposure=max_exposure,
+                    min_salary_pct=min_salary_pct
                 )
                 
-                if not lineups:
-                    st.error("❌ Failed to generate valid lineups. Check your constraints.")
-                    return
-                
-                st.session_state.lineups = lineups
-                st.success(f"✅ Generated {len(lineups)} unique lineups!")
-                
-            except Exception as e:
-                st.error(f"❌ Error generating lineups: {str(e)}")
-                st.code(traceback.format_exc())
-                return
+                if lineups and len(lineups) > 0:
+                    st.session_state.generated_lineups = lineups
+                    st.success(f"✅ Generated {len(lineups)} unique lineups!")
+                else:
+                    st.error("❌ Failed to generate lineups")
+                    
+        except Exception as e:
+            st.error(f"❌ Error generating lineups: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+
+
+def display_lineups_section():
+    """Display generated lineups"""
+    if not st.session_state.generated_lineups:
+        st.info("💡 Generate lineups to see them here")
+        return
     
-    # Display lineups
-    if 'lineups' in st.session_state:
-        st.markdown("---")
-        st.header("📊 Generated Lineups")
-        
-        # Tabs for different views
-        tab1, tab2, tab3 = st.tabs(["📋 Individual Lineups", "📈 Portfolio Analysis", "💾 Export"])
-        
-        with tab1:
-            # Display each lineup
-            for i, lineup in enumerate(st.session_state.lineups, 1):
-                with st.expander(f"Lineup #{i} - Proj: {lineup['projection'].sum():.1f}, Salary: ${lineup['salary'].sum():,.0f}"):
-                    display_lineup(lineup, i)
-        
-        with tab2:
-            st.subheader("Portfolio Metrics")
+    st.subheader("📋 Generated Lineups")
+    
+    lineups = st.session_state.generated_lineups
+    
+    # Summary metrics
+    total_proj = sum(lu['total_projection'] for lu in lineups)
+    avg_proj = total_proj / len(lineups) if lineups else 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Lineups Generated", len(lineups))
+    with col2:
+        st.metric("Avg Projection", f"{avg_proj:.1f}")
+    with col3:
+        st.metric("Avg Salary", f"${sum(lu['total_salary'] for lu in lineups) / len(lineups):,.0f}")
+    with col4:
+        st.metric("Avg Ownership", f"{sum(lu.get('avg_ownership', 0) for lu in lineups) / len(lineups):.1f}%")
+    
+    # Display each lineup
+    for i, lineup in enumerate(lineups, 1):
+        with st.expander(f"Lineup {i} - Proj: {lineup['total_projection']:.1f} | Salary: ${lineup['total_salary']:,}"):
             
-            try:
-                lineups = st.session_state.lineups
-                
-                # Calculate portfolio metrics
-                all_projections = [lu['projection'].sum() for lu in lineups]
-                all_salaries = [lu['salary'].sum() for lu in lineups]
-                all_ownerships = [lu['ownership'].mean() for lu in lineups]
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Avg Projection", f"{np.mean(all_projections):.1f}")
-                    st.metric("Projection Range", f"{np.min(all_projections):.1f} - {np.max(all_projections):.1f}")
-                with col2:
-                    st.metric("Avg Salary", f"${np.mean(all_salaries):,.0f}")
-                    st.metric("Salary Range", f"${np.min(all_salaries):,.0f} - ${np.max(all_salaries):,.0f}")
-                with col3:
-                    st.metric("Avg Ownership", f"{np.mean(all_ownerships):.1f}%")
-                    st.metric("Ownership Range", f"{np.min(all_ownerships):.1f}% - {np.max(all_ownerships):.1f}%")
-                
-                # Player exposure
-                st.subheader("Player Exposure")
-                
-                player_counts = {}
-                for lineup in lineups:
-                    for _, player in lineup.iterrows():
-                        name = player['name']
-                        player_counts[name] = player_counts.get(name, 0) + 1
-                
-                exposure_df = pd.DataFrame([
-                    {'Player': name, 'Exposure': (count / len(lineups)) * 100}
-                    for name, count in player_counts.items()
-                ]).sort_values('Exposure', ascending=False)
-                
-                # Top 10 most exposed
-                st.markdown("**Most Exposed Players:**")
-                top_exposure = exposure_df.head(10).copy()
-                top_exposure['Exposure'] = top_exposure['Exposure'].apply(lambda x: f"{x:.1f}%")
-                st.dataframe(top_exposure, use_container_width=True, hide_index=True)
-                
-                # Least exposed (>0%)
-                st.markdown("**Least Exposed Players:**")
-                least_exposure = exposure_df[exposure_df['Exposure'] > 0].tail(10).copy()
-                least_exposure['Exposure'] = least_exposure['Exposure'].apply(lambda x: f"{x:.1f}%")
-                st.dataframe(least_exposure, use_container_width=True, hide_index=True)
-                
-            except Exception as e:
-                st.error(f"Error calculating portfolio metrics: {str(e)}")
-                st.code(traceback.format_exc())
-        
-        with tab3:
-            st.subheader("Export Lineups")
+            # Convert to dataframe
+            lineup_df = pd.DataFrame(lineup['players'])
             
-            # Prepare export data
-            export_lineups = []
-            for i, lineup in enumerate(st.session_state.lineups, 1):
-                lineup_dict = {'Lineup': i}
-                for idx, (_, player) in enumerate(lineup.iterrows(), 1):
-                    lineup_dict[f'Player_{idx}'] = player['name']
-                    lineup_dict[f'Pos_{idx}'] = player['position']
-                    lineup_dict[f'Salary_{idx}'] = player['salary']
-                export_lineups.append(lineup_dict)
-            
-            export_df = pd.DataFrame(export_lineups)
-            
-            # Download button
-            csv = export_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Lineups (CSV)",
-                data=csv,
-                file_name=f"dfs_lineups_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
+            # Display lineup
+            st.dataframe(
+                lineup_df[['player_name', 'position', 'team', 'salary', 'projection', 'ownership']],
+                use_container_width=True,
+                hide_index=True
             )
             
-            st.info("💡 Import this CSV into your DFS platform for bulk upload")
+            # Metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Projection", f"{lineup['total_projection']:.1f}")
+            with col2:
+                st.metric("Total Salary", f"${lineup['total_salary']:,}")
+            with col3:
+                st.metric("Avg Ownership", f"{lineup.get('avg_ownership', 0):.1f}%")
+
+
+def sidebar_content():
+    """Sidebar with app info and settings"""
+    with st.sidebar:
+        st.markdown("## 🎯 DFS Meta-Optimizer")
+        st.markdown("*v5.0.0*")
+        st.markdown("---")
+        
+        st.markdown("### 📖 About")
+        st.markdown("""
+        This optimizer uses **opponent modeling** to find lineups that maximize 
+        your competitive advantage, not just projected points.
+        """)
+        
+        st.markdown("---")
+        st.markdown("### ⚙️ Settings")
+        
+        st.write(f"**Salary Cap:** ${SALARY_CAP:,}")
+        st.write(f"**Roster Size:** {ROSTER_SIZE}")
+        
+        if ENABLE_CLAUDE_AI and st.session_state.ai_assistant:
+            st.success("✅ Claude AI: Active")
+        else:
+            st.warning("⚠️ Claude AI: Inactive")
+        
+        st.markdown("---")
+        st.markdown("### 📊 Optimization Modes")
+        
+        for mode_name, mode_config in OPTIMIZATION_MODES.items():
+            with st.expander(mode_name.title()):
+                st.write(f"**{mode_config['description']}**")
+                st.write(f"- Projection Weight: {mode_config['projection_weight']}")
+                st.write(f"- Leverage Weight: {mode_config['leverage_weight']}")
+                st.write(f"- Ceiling Weight: {mode_config['ceiling_weight']}")
+
+
+def main():
+    """Main application function"""
+    initialize_session_state()
+    sidebar_content()
+    
+    # Header
+    st.markdown("<h1 class='main-header'>🎯 DFS Meta-Optimizer</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Maximize Competitive Advantage Through Opponent Modeling</p>", unsafe_allow_html=True)
+    
+    # Step 1: Upload Data
+    st.markdown("---")
+    st.header("📤 Step 1: Upload Player Data")
+    
+    uploaded_file = st.file_uploader(
+        "Upload CSV file with player data",
+        type=['csv'],
+        help="CSV must include: name (or first_name/last_name), position, team, salary, projection"
+    )
+    
+    if uploaded_file is not None:
+        # Process CSV
+        with st.spinner("Processing player data..."):
+            df = process_csv(pd.read_csv(uploaded_file))
+        
+        if df is not None:
+            st.session_state.players_df = df
+            st.success(f"✅ Loaded {len(df)} players successfully!")
+            
+            # AI Ownership Prediction
+            if ENABLE_CLAUDE_AI and AI_OWNERSHIP_PREDICTION:
+                if st.button("🤖 Predict Ownership with AI", type="secondary"):
+                    st.session_state.players_df = predict_ownership_ai(df)
+                    df = st.session_state.players_df
+            
+            # Display player pool
+            st.markdown("---")
+            filtered_df = display_player_pool(df)
+            
+            # Step 2: Opponent Modeling
+            st.markdown("---")
+            st.header("🎯 Step 2: Opponent Modeling")
+            
+            if st.button("Run Opponent Analysis", type="secondary", use_container_width=True):
+                run_opponent_modeling(df)
+            
+            # Step 3: Generate Lineups
+            st.markdown("---")
+            st.header("🚀 Step 3: Generate Lineups")
+            generate_lineups_section(df)
+            
+            # Step 4: View Lineups
+            st.markdown("---")
+            st.header("📋 Step 4: Review Lineups")
+            display_lineups_section()
+    
+    else:
+        st.info("👆 Upload a CSV file to get started")
+        
+        # Show example format
+        with st.expander("📄 See Example CSV Format"):
+            example_df = pd.DataFrame({
+                'name': ['Patrick Mahomes', 'Travis Kelce'],
+                'position': ['QB', 'TE'],
+                'team': ['KC', 'KC'],
+                'salary': [8500, 6800],
+                'projection': [24.5, 16.2]
+            })
+            st.dataframe(example_df)
+
 
 if __name__ == "__main__":
     main()
