@@ -1,403 +1,292 @@
 """
 Configuration Settings for DFS Meta-Optimizer
 
-All application configuration in one place.
+All settings for the optimizer including:
+- Optimization modes
+- DFS constraints
+- AI settings
+- Feature flags
 """
 
 import os
-from typing import Dict
+from dotenv import load_dotenv
 
-# ============================================================================
-# DRAFTKINGS SHOWDOWN SETTINGS
-# ============================================================================
+# Load environment variables
+load_dotenv()
 
-# Salary cap for DraftKings Showdown
+# ====================
+# CORE DFS CONSTRAINTS
+# ====================
+
 SALARY_CAP = 50000
+ROSTER_SIZE = 9
+MIN_SALARY_PCT = 0.96  # Use 96% of salary cap minimum
 
-# Roster size (1 Captain + 5 FLEX)
-ROSTER_SIZE = 6
+# Position requirements (DraftKings standard)
+POSITION_REQUIREMENTS = {
+    'QB': 1,
+    'RB': 2,
+    'WR': 3,
+    'TE': 1,
+    'FLEX': 1,  # RB/WR/TE
+    'DST': 1
+}
 
-# Captain point multiplier
-CAPTAIN_MULTIPLIER = 1.5
+# ====================
+# CLAUDE AI SETTINGS
+# ====================
 
-# Minimum salary cap usage (as percentage)
-MIN_SALARY_USAGE = 0.96  # 96%
+# Enable/disable Claude AI features
+ENABLE_CLAUDE_AI = True
+AI_OWNERSHIP_PREDICTION = True
+AI_STRATEGIC_ANALYSIS = True
 
-# ============================================================================
+# API Configuration
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+CLAUDE_MODEL = "claude-sonnet-4-20250514"
+CLAUDE_MAX_TOKENS = 4000
+CLAUDE_TEMPERATURE = 0.7
+
+# Cost tracking
+ESTIMATED_COST_PER_REQUEST = 0.006  # ~$0.006 per request
+
+# ====================
 # OPTIMIZATION MODES
-# ============================================================================
-
-# Define different optimization strategies
-# Each mode has different weight configurations for:
-# - projection_weight: How much to value projected points
-# - leverage_weight: How much to value leverage score
-# - ceiling_weight: How much to value upside potential
-# - ownership_weight: How much to fade high ownership (higher = more fade)
+# ====================
 
 OPTIMIZATION_MODES = {
     'conservative': {
-        'projection_weight': 1.0,    # Focus on projections
-        'leverage_weight': 0.2,      # Light leverage consideration
-        'ceiling_weight': 0.1,       # Minimal ceiling focus
-        'ownership_weight': 0.02,    # Slight chalk fade
-        'description': 'Projections-first with high-owned players'
+        'description': 'Safe cash game builds - high floor, consistent scoring',
+        'projection_weight': 1.5,
+        'ceiling_weight': 0.3,
+        'leverage_weight': 0.1,
+        'ownership_penalty': 0.05,
+        'floor_weight': 0.8,
+        'correlation_weight': 0.2,
+        'population_size': 50,
+        'generations': 30,
+        'mutation_rate': 0.15
     },
     
     'balanced': {
-        'projection_weight': 0.8,    # Strong projection focus
-        'leverage_weight': 0.6,      # Moderate leverage
-        'ceiling_weight': 0.4,       # Moderate ceiling
-        'ownership_weight': 0.01,    # Light ownership consideration
-        'description': 'Balanced approach with moderate leverage'
+        'description': 'Balanced GPP approach - mix of safety and upside',
+        'projection_weight': 1.0,
+        'ceiling_weight': 0.7,
+        'leverage_weight': 0.4,
+        'ownership_penalty': 0.15,
+        'floor_weight': 0.4,
+        'correlation_weight': 0.5,
+        'population_size': 100,
+        'generations': 50,
+        'mutation_rate': 0.2
     },
     
     'leverage': {
-        'projection_weight': 0.6,    # Moderate projection focus
-        'leverage_weight': 1.0,      # Maximum leverage focus
-        'ceiling_weight': 0.8,       # High ceiling focus
-        'ownership_weight': 0.005,   # Minimal ownership fade
-        'description': 'Leverage-first with high upside plays'
+        'description': 'High-leverage tournament plays - maximize ceiling/ownership ratio',
+        'projection_weight': 0.7,
+        'ceiling_weight': 1.2,
+        'leverage_weight': 1.0,
+        'ownership_penalty': 0.25,
+        'floor_weight': 0.2,
+        'correlation_weight': 0.7,
+        'population_size': 150,
+        'generations': 75,
+        'mutation_rate': 0.25
     },
     
     'contrarian': {
-        'projection_weight': 0.5,    # Lower projection focus
-        'leverage_weight': 1.0,      # Maximum leverage
-        'ceiling_weight': 0.9,       # Maximum ceiling focus
-        'ownership_weight': 0.001,   # Almost no ownership penalty
-        'description': 'Anti-chalk strategy with contrarian picks'
+        'description': 'Maximum differentiation - fade the chalk, unique builds',
+        'projection_weight': 0.5,
+        'ceiling_weight': 1.0,
+        'leverage_weight': 1.2,
+        'ownership_penalty': 0.4,
+        'floor_weight': 0.1,
+        'correlation_weight': 0.8,
+        'population_size': 150,
+        'generations': 75,
+        'mutation_rate': 0.3
     },
     
     'cash': {
-        'projection_weight': 1.0,    # Maximum projection focus
-        'leverage_weight': 0.1,      # Minimal leverage
-        'ceiling_weight': 0.0,       # No ceiling consideration
-        'ownership_weight': 0.03,    # Moderate chalk fade for safety
-        'description': 'Cash game focused - high floor, safe plays'
+        'description': 'Cash game optimization - maximize floor and consistency',
+        'projection_weight': 1.8,
+        'ceiling_weight': 0.2,
+        'leverage_weight': 0.0,
+        'ownership_penalty': 0.0,
+        'floor_weight': 1.2,
+        'correlation_weight': 0.3,
+        'population_size': 40,
+        'generations': 25,
+        'mutation_rate': 0.1
     }
 }
 
-# Default optimization mode
+# Default mode
 DEFAULT_MODE = 'balanced'
 
-# ============================================================================
-# LINEUP GENERATION SETTINGS
-# ============================================================================
+# ====================
+# LINEUP GENERATION
+# ====================
 
-# Maximum player exposure across portfolio (0-1)
-MAX_PLAYER_EXPOSURE = 0.40  # 40%
+# Diversity settings
+DEFAULT_DIVERSITY_FACTOR = 0.3
+MIN_UNIQUE_PLAYERS = 3  # Minimum different players between lineups
 
-# Minimum player difference between lineups
-MIN_PLAYER_DIFFERENCE = 2  # At least 2 different players
+# Duplicate detection threshold
+DUPLICATE_THRESHOLD = 7  # Max matching players before considering duplicate
 
-# Default number of lineups to generate
-DEFAULT_LINEUP_COUNT = 20
+# ====================
+# STACKING PREFERENCES
+# ====================
 
-# Maximum lineups per generation (prevent excessive API usage)
-MAX_LINEUP_COUNT = 150
+# Correlation thresholds
+MIN_QB_STACK_CORRELATION = 0.5
+MIN_GAME_STACK_CORRELATION = 0.4
 
-# ============================================================================
-# CLAUDE AI SETTINGS
-# ============================================================================
+# Stack enforcement
+ENFORCE_QB_STACKS = True
+MIN_STACK_SIZE = 2  # QB + at least 1 pass catcher
 
-# Enable Claude AI features
-ENABLE_CLAUDE_AI = True
+# ====================
+# EXPOSURE MANAGEMENT
+# ====================
 
-# Anthropic API key (from environment or Streamlit secrets)
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+# Global exposure limits
+GLOBAL_MAX_EXPOSURE = 40.0  # 40% max for any player
+GLOBAL_MIN_EXPOSURE = 0.0
 
-# Try Streamlit secrets if environment variable not found
-try:
-    import streamlit as st
-    if not ANTHROPIC_API_KEY and hasattr(st, 'secrets'):
-        ANTHROPIC_API_KEY = st.secrets.get('ANTHROPIC_API_KEY', '')
-except ImportError:
-    pass
+# Captain exposure (for showdown)
+MAX_CAPTAIN_EXPOSURE = 30.0
 
-# Claude model to use
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+# ====================
+# PORTFOLIO SETTINGS
+# ====================
 
-# Maximum tokens per Claude API call
-CLAUDE_MAX_TOKENS = 2000
+# Multi-entry defaults
+DEFAULT_PORTFOLIO_SIZE = 20
+MAX_PORTFOLIO_SIZE = 150
 
-# Temperature for Claude responses (0-1, higher = more random)
-CLAUDE_TEMPERATURE = 0.7
-
-# ============================================================================
-# OPPONENT MODELING SETTINGS
-# ============================================================================
-
-# Ownership thresholds for player categorization
-CHALK_THRESHOLD = 0.75      # Top 25% ownership = chalk
-LEVERAGE_THRESHOLD = 0.75   # Top 25% leverage = good leverage
-
-# Contrarian ownership threshold (below this = contrarian)
-CONTRARIAN_THRESHOLD = 0.25  # Bottom 25% ownership
-
-# ============================================================================
-# PORTFOLIO OPTIMIZATION SETTINGS
-# ============================================================================
-
-# Exposure management
-SOFT_EXPOSURE_CAP = 0.35    # 35% soft cap (warning)
-HARD_EXPOSURE_CAP = 0.45    # 45% hard cap (prevent)
-
-# Position exposure limits (for classic contests)
-POSITION_EXPOSURE_LIMITS = {
-    'QB': 0.50,   # 50% max
-    'RB': 0.40,   # 40% max
-    'WR': 0.40,   # 40% max
-    'TE': 0.40,   # 40% max
-    'DST': 0.30   # 30% max
+# Tiered portfolio distribution
+TIERED_DISTRIBUTION = {
+    'safe': 0.30,      # 30% conservative plays
+    'balanced': 0.50,  # 50% balanced builds
+    'contrarian': 0.20 # 20% high-risk/reward
 }
 
-# Team exposure limits
-MAX_TEAM_EXPOSURE = 0.40    # 40% max from single team
-
-# ============================================================================
-# CORRELATION SETTINGS
-# ============================================================================
-
-# QB stack preferences
-QB_STACK_TARGETS = ['WR', 'TE']  # Positions to stack with QB
-
-# Minimum correlation threshold for stacking
-MIN_CORRELATION_SCORE = 0.3
-
-# Bring-back recommendations (opponents of stacked team)
-ENABLE_BRINGBACK = True
-BRINGBACK_POSITIONS = ['WR', 'TE', 'RB']
-
-# ============================================================================
+# ====================
 # SIMULATION SETTINGS
-# ============================================================================
+# ====================
 
-# Monte Carlo simulation settings
-MONTE_CARLO_SIMULATIONS = 10000
+# Monte Carlo defaults
+DEFAULT_SIMULATIONS = 10000
+QUICK_SIMULATIONS = 1000
+THOROUGH_SIMULATIONS = 50000
 
-# Percentiles to calculate for projections
-PROJECTION_PERCENTILES = [10, 25, 50, 75, 90]
+# Contest simulation
+DEFAULT_CONTEST_SIZE = 150000  # Milly Maker size
+DEFAULT_FIELD_AVG = 140.0
+DEFAULT_FIELD_STD = 15.0
 
-# Contest simulation settings
-SIMULATE_FIELD_SIZE = 10000  # Number of opponents to simulate
+# ====================
+# REAL-TIME DATA
+# ====================
 
-# ============================================================================
-# DATA VALIDATION SETTINGS
-# ============================================================================
+# News impact thresholds
+CRITICAL_NEWS_IMPACT = 80
+HIGH_NEWS_IMPACT = 60
+MEDIUM_NEWS_IMPACT = 40
 
-# Required CSV columns
-REQUIRED_CSV_COLUMNS = ['name', 'team', 'position', 'salary', 'projection']
+# Vegas line movement thresholds
+SIGNIFICANT_SPREAD_MOVE = 1.0  # Points
+SIGNIFICANT_TOTAL_MOVE = 2.0   # Points
 
-# Optional CSV columns (will be calculated if missing)
-OPTIONAL_CSV_COLUMNS = ['ownership', 'ceiling', 'floor']
+# Ownership thresholds
+CHALK_THRESHOLD = 25.0    # 25%+ is chalk
+LEVERAGE_THRESHOLD = 15.0  # <15% is leverage play
 
-# Valid positions
-VALID_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'DST']
+# ====================
+# DISPLAY SETTINGS
+# ====================
 
-# Salary range validation
-MIN_PLAYER_SALARY = 2000
-MAX_PLAYER_SALARY = 15000
+# Number formatting
+CURRENCY_FORMAT = "${:,.0f}"
+PERCENTAGE_FORMAT = "{:.1f}%"
+DECIMAL_FORMAT = "{:.2f}"
 
-# Projection range validation
-MIN_PROJECTION = 0
-MAX_PROJECTION = 100
+# Lineup display
+SHOW_CAPTAIN_INDICATOR = True
+SHOW_LEVERAGE_SCORES = True
+SHOW_CORRELATION_SCORES = True
 
-# ============================================================================
-# UI SETTINGS
-# ============================================================================
+# ====================
+# PERFORMANCE TUNING
+# ====================
 
-# Streamlit page configuration
-PAGE_TITLE = "DFS Meta-Optimizer"
-PAGE_ICON = "🎯"
-LAYOUT = "wide"
+# Genetic algorithm limits
+MAX_GENERATIONS = 200
+MAX_POPULATION_SIZE = 300
 
-# Display settings
-SHOW_DEBUG_INFO = False
-VERBOSE_LOGGING = True
+# Lineup generation timeout
+GENERATION_TIMEOUT_SECONDS = 300  # 5 minutes max
 
-# ============================================================================
-# EXPORT SETTINGS
-# ============================================================================
+# Memory management
+MAX_CACHED_LINEUPS = 1000
 
-# Default export filename
-DEFAULT_EXPORT_FILENAME = "lineups.csv"
+# ====================
+# FEATURE FLAGS
+# ====================
 
-# Export format
-EXPORT_FORMAT = "draftkings"  # Options: "draftkings", "fanduel", "yahoo"
+# Module toggles
+ENABLE_MODULE_2 = True  # Genetic optimization
+ENABLE_MODULE_3 = True  # Portfolio optimization
+ENABLE_MODULE_4 = True  # Real-time data
+ENABLE_MODULE_5 = True  # Monte Carlo simulation
 
-# Include metadata in export
-INCLUDE_METADATA = True
+# Advanced features
+ENABLE_STACKING = True
+ENABLE_EXPOSURE_MANAGEMENT = True
+ENABLE_VARIANCE_ANALYSIS = True
+ENABLE_CONTEST_SELECTION = True
 
-# ============================================================================
-# ADVANCED SETTINGS (rarely need to change)
-# ============================================================================
+# ====================
+# DEBUG & LOGGING
+# ====================
 
-# Genetic algorithm settings (if using Module 2)
-GA_POPULATION_SIZE = 100
-GA_GENERATIONS = 50
-GA_MUTATION_RATE = 0.15
-GA_CROSSOVER_RATE = 0.80
-GA_ELITE_SIZE = 10
+DEBUG_MODE = False
+VERBOSE_LOGGING = False
+SHOW_GENERATION_PROGRESS = True
 
-# Real-time data refresh interval (seconds)
-DATA_REFRESH_INTERVAL = 300  # 5 minutes
+# Log file
+LOG_FILE = "dfs_optimizer.log"
 
-# API rate limiting
-MAX_API_CALLS_PER_MINUTE = 50
-API_TIMEOUT_SECONDS = 30
+# ====================
+# VALIDATION
+# ====================
 
-# ============================================================================
-# ENVIRONMENT-SPECIFIC SETTINGS
-# ============================================================================
-
-# Development vs Production
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
-
-if ENVIRONMENT == 'development':
-    DEBUG_MODE = True
-    VERBOSE_LOGGING = True
-    SHOW_DEBUG_INFO = True
-else:
-    DEBUG_MODE = False
-    VERBOSE_LOGGING = False
-    SHOW_DEBUG_INFO = False
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def get_mode_config(mode: str = None) -> Dict:
-    """
-    Get configuration for optimization mode
-    
-    Args:
-        mode: Mode name (defaults to DEFAULT_MODE)
-    
-    Returns:
-        Mode configuration dictionary
-    """
-    if mode is None:
-        mode = DEFAULT_MODE
-    
-    if mode not in OPTIMIZATION_MODES:
-        print(f"Warning: Mode '{mode}' not found, using '{DEFAULT_MODE}'")
-        mode = DEFAULT_MODE
-    
-    return OPTIMIZATION_MODES[mode]
-
-
-def validate_api_key() -> bool:
-    """
-    Validate that Anthropic API key is configured
-    
-    Returns:
-        True if API key is set, False otherwise
-    """
-    if not ANTHROPIC_API_KEY:
-        return False
-    
-    if len(ANTHROPIC_API_KEY) < 50:
-        return False
-    
-    if not ANTHROPIC_API_KEY.startswith('sk-ant-'):
-        return False
-    
-    return True
-
-
-def get_salary_range() -> tuple:
-    """
-    Get valid salary range
-    
-    Returns:
-        Tuple of (min_salary, max_salary)
-    """
-    return (MIN_PLAYER_SALARY, MAX_PLAYER_SALARY)
-
-
-def get_required_salary() -> int:
-    """
-    Get minimum required salary usage
-    
-    Returns:
-        Minimum salary to use
-    """
-    return int(SALARY_CAP * MIN_SALARY_USAGE)
-
-
-# ============================================================================
-# CONFIGURATION VALIDATION
-# ============================================================================
-
-def validate_config() -> bool:
-    """
-    Validate all configuration settings
-    
-    Returns:
-        True if configuration is valid
-    """
+def validate_settings():
+    """Validate critical settings"""
     errors = []
     
-    # Validate salary cap
-    if SALARY_CAP <= 0:
-        errors.append("SALARY_CAP must be positive")
+    # Check AI key if AI enabled
+    if ENABLE_CLAUDE_AI and not ANTHROPIC_API_KEY:
+        errors.append("ANTHROPIC_API_KEY not set but AI is enabled")
     
-    # Validate roster size
-    if ROSTER_SIZE < 2:
-        errors.append("ROSTER_SIZE must be at least 2")
+    # Check salary constraints
+    if MIN_SALARY_PCT < 0.9 or MIN_SALARY_PCT > 1.0:
+        errors.append(f"MIN_SALARY_PCT should be 0.9-1.0, got {MIN_SALARY_PCT}")
     
-    # Validate captain multiplier
-    if CAPTAIN_MULTIPLIER <= 1:
-        errors.append("CAPTAIN_MULTIPLIER must be greater than 1")
-    
-    # Validate optimization modes
-    for mode, config in OPTIMIZATION_MODES.items():
-        required_keys = ['projection_weight', 'leverage_weight', 'ceiling_weight', 'ownership_weight']
+    # Check optimization modes
+    for mode_name, mode_config in OPTIMIZATION_MODES.items():
+        required_keys = ['projection_weight', 'ceiling_weight', 'leverage_weight']
         for key in required_keys:
-            if key not in config:
-                errors.append(f"Mode '{mode}' missing required key: {key}")
+            if key not in mode_config:
+                errors.append(f"Mode '{mode_name}' missing required key: {key}")
     
-    # Validate exposure settings
-    if MAX_PLAYER_EXPOSURE <= 0 or MAX_PLAYER_EXPOSURE > 1:
-        errors.append("MAX_PLAYER_EXPOSURE must be between 0 and 1")
-    
-    # Print errors if any
-    if errors:
-        print("❌ Configuration validation errors:")
-        for error in errors:
-            print(f"   - {error}")
-        return False
-    
-    return True
+    return errors
 
-
-# Validate configuration on import
-if __name__ != '__main__':
-    if not validate_config():
-        print("⚠️ Warning: Configuration validation failed!")
-
-# ============================================================================
-# EXPORT SETTINGS SUMMARY
-# ============================================================================
-
-def print_config_summary():
-    """Print summary of current configuration"""
-    print("=" * 60)
-    print("DFS META-OPTIMIZER CONFIGURATION")
-    print("=" * 60)
-    print(f"Salary Cap: ${SALARY_CAP:,}")
-    print(f"Roster Size: {ROSTER_SIZE} (1 CPT + {ROSTER_SIZE-1} FLEX)")
-    print(f"Captain Multiplier: {CAPTAIN_MULTIPLIER}x")
-    print(f"Min Salary Usage: {MIN_SALARY_USAGE*100:.0f}% (${get_required_salary():,})")
-    print()
-    print("Optimization Modes:")
-    for mode, config in OPTIMIZATION_MODES.items():
-        print(f"  {mode}: {config.get('description', 'No description')}")
-    print()
-    print(f"Claude AI: {'Enabled' if ENABLE_CLAUDE_AI and validate_api_key() else 'Disabled'}")
-    print(f"Environment: {ENVIRONMENT}")
-    print(f"Debug Mode: {DEBUG_MODE}")
-    print("=" * 60)
-
-
-# Uncomment to see config summary on import
-# print_config_summary()
+# Run validation on import
+_validation_errors = validate_settings()
+if _validation_errors:
+    print("⚠️  Configuration validation warnings:")
+    for error in _validation_errors:
+        print(f"   - {error}")
