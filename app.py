@@ -164,8 +164,8 @@ def player_input_section():
                     if st.button("🤖 Predict Ownership with AI", type="primary"):
                         with st.spinner("🤖 AI is predicting ownership percentages..."):
                             try:
-                                # Call Claude to predict ownership
-                                updated_df = st.session_state.claude_assistant.predict_ownership(df.copy())
+                                # Call Claude to predict ownership (batch method for all players)
+                                updated_df = st.session_state.claude_assistant.batch_predict_ownership(df.copy())
                                 
                                 if updated_df is not None and 'ownership' in updated_df.columns:
                                     # Ensure ownership is numeric
