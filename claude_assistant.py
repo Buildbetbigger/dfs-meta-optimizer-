@@ -122,7 +122,7 @@ def retry_with_exponential_backoff(
 # ADVANCED AI ASSISTANT
 # ==============================================================================
 
-class AIAssistant:
+class ClaudeAssistant:
     """
     Enterprise-grade AI assistant with advanced features
     
@@ -729,7 +729,7 @@ Keep response under 250 words. Be specific and actionable."""
 # ==============================================================================
 
 __all__ = [
-    'AIAssistant',
+    'ClaudeAssistant',
     'APIRequest',
     'PredictionCache',
 ]
