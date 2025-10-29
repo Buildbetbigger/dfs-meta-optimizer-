@@ -1,12 +1,19 @@
 """
-Module 4: Weather Data Integration
-Fetches weather data for NFL games to inform DFS decisions
+Module 4: Weather Data Integration - ENHANCED v7.1.0
+Fetches LIVE weather data for NFL games to inform DFS decisions
+
+NEW in v7.1.0:
+- Live API integration with OpenWeatherMap
+- Automatic .env file loading for API keys
+- Response caching (1 hour TTL)
+- Enhanced error handling with fallbacks
+- Better logging and monitoring
 """
 
 import pandas as pd
 import requests
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,33 +28,35 @@ class WeatherDataProvider:
     - Rain/Snow: Reduces passing, increases running
     - Temperature: Affects ball handling, player performance
     - Dome games: No weather impact
+    
+    v7.1.0: Now with LIVE API integration!
     """
     
     # NFL stadium locations
     STADIUM_CITIES = {
-        'ARI': 'Phoenix',  # State Farm Stadium (retractable roof)
-        'ATL': 'Atlanta',  # Mercedes-Benz Stadium (retractable roof)
+        'ARI': 'Phoenix',
+        'ATL': 'Atlanta',
         'BAL': 'Baltimore',
         'BUF': 'Buffalo',
         'CAR': 'Charlotte',
         'CHI': 'Chicago',
         'CIN': 'Cincinnati',
         'CLE': 'Cleveland',
-        'DAL': 'Arlington',  # AT&T Stadium (retractable roof)
+        'DAL': 'Arlington',
         'DEN': 'Denver',
-        'DET': 'Detroit',  # Ford Field (dome)
+        'DET': 'Detroit',
         'GB': 'Green Bay',
-        'HOU': 'Houston',  # NRG Stadium (retractable roof)
-        'IND': 'Indianapolis',  # Lucas Oil Stadium (retractable roof)
+        'HOU': 'Houston',
+        'IND': 'Indianapolis',
         'JAX': 'Jacksonville',
         'KC': 'Kansas City',
-        'LAC': 'Los Angeles',  # SoFi Stadium (indoor)
-        'LAR': 'Los Angeles',  # SoFi Stadium (indoor)
-        'LV': 'Las Vegas',  # Allegiant Stadium (dome)
+        'LAC': 'Los Angeles',
+        'LAR': 'Los Angeles',
+        'LV': 'Las Vegas',
         'MIA': 'Miami',
-        'MIN': 'Minneapolis',  # U.S. Bank Stadium (dome)
+        'MIN': 'Minneapolis',
         'NE': 'Foxborough',
-        'NO': 'New Orleans',  # Superdome (dome)
+        'NO': 'New Orleans',
         'NYG': 'East Rutherford',
         'NYJ': 'East Rutherford',
         'PHI': 'Philadelphia',
@@ -74,16 +83,35 @@ class WeatherDataProvider:
         Initialize weather data provider.
         
         Args:
-            api_key: OpenWeatherMap API key (free tier: 1000 calls/day)
+            api_key: OpenWeatherMap API key (optional, will load from .env)
                     Get free key at: https://openweathermap.org/api
         """
+        # Try to load from environment if not provided
+        if not api_key:
+            try:
+                from dotenv import load_dotenv
+                import os
+                load_dotenv()
+                api_key = os.getenv('OPENWEATHER_API_KEY')
+            except ImportError:
+                logger.warning("python-dotenv not installed. Install with: pip install python-dotenv")
+            except Exception as e:
+                logger.warning(f"Error loading .env file: {e}")
+        
         self.api_key = api_key
         self.base_url = "https://api.openweathermap.org/data/2.5/forecast"
         
-        if not api_key:
-            logger.warning("No API key provided. Weather data will be estimated.")
+        # Initialize cache
+        self._weather_cache = {}
+        self._cache_timeout = 3600  # 1 hour cache
         
-        logger.info("WeatherDataProvider initialized")
+        if not api_key:
+            logger.warning("⚠️ No API key provided. Weather data will be estimated.")
+            logger.info("To enable live weather: Get free API key from https://openweathermap.org/api")
+        else:
+            logger.info("✅ Weather API initialized with live data source")
+        
+        logger.info("WeatherDataProvider v7.1.0 initialized")
     
     def _is_dome_game(self, team: str) -> bool:
         """Check if team plays in dome/indoor stadium"""
@@ -99,7 +127,7 @@ class WeatherDataProvider:
         game_date: Optional[datetime] = None
     ) -> Dict:
         """
-        Get weather forecast for city.
+        Get weather forecast for city with caching.
         
         Args:
             city: City name (e.g., 'Green Bay', 'Buffalo')
@@ -108,8 +136,42 @@ class WeatherDataProvider:
         Returns:
             Dictionary with weather data
         """
+        # Check cache first
+        cache_key = f"{city}_{game_date.date() if game_date else 'now'}"
+        
+        if cache_key in self._weather_cache:
+            cached_data, cache_time = self._weather_cache[cache_key]
+            age = (datetime.now() - cache_time).total_seconds()
+            
+            if age < self._cache_timeout:
+                logger.debug(f"Using cached weather for {city} (age: {age:.0f}s)")
+                return cached_data
+        
+        # Fetch fresh data
+        weather_data = self._fetch_weather_from_api(city, game_date)
+        
+        # Cache result
+        self._weather_cache[cache_key] = (weather_data, datetime.now())
+        
+        return weather_data
+    
+    def _fetch_weather_from_api(
+        self,
+        city: str,
+        game_date: Optional[datetime] = None
+    ) -> Dict:
+        """
+        Fetch weather data from OpenWeatherMap API.
+        
+        Args:
+            city: City name
+            game_date: Date of game
+        
+        Returns:
+            Dictionary with weather data
+        """
         if not self.api_key:
-            logger.warning(f"No API key - returning default weather for {city}")
+            logger.debug(f"No API key - returning default weather for {city}")
             return self._get_default_weather()
         
         try:
@@ -119,14 +181,20 @@ class WeatherDataProvider:
                 'units': 'imperial'  # Fahrenheit
             }
             
-            response = requests.get(self.base_url, params=params, timeout=5)
+            response = requests.get(self.base_url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
             
+            # Validate response structure
+            if 'list' not in data or len(data['list']) == 0:
+                logger.error(f"Invalid API response structure for {city}")
+                return self._get_default_weather()
+            
             # Get first forecast (or closest to game_date)
             forecast = data['list'][0]
             
+            # Parse weather data
             weather_data = {
                 'temperature': forecast['main']['temp'],
                 'feels_like': forecast['main']['feels_like'],
@@ -134,18 +202,39 @@ class WeatherDataProvider:
                 'wind_gust': forecast['wind'].get('gust', forecast['wind']['speed']),
                 'conditions': forecast['weather'][0]['main'],
                 'description': forecast['weather'][0]['description'],
-                'precipitation_prob': forecast.get('pop', 0) * 100,  # Probability of precipitation
+                'precipitation_prob': forecast.get('pop', 0) * 100,
                 'humidity': forecast['main']['humidity'],
                 'city': city
             }
             
-            logger.info(f"Weather for {city}: {weather_data['temperature']}°F, "
-                       f"{weather_data['wind_speed']} mph wind, {weather_data['conditions']}")
+            logger.info(f"✅ Live weather: {city} = {weather_data['temperature']:.0f}°F, "
+                       f"{weather_data['wind_speed']:.0f} mph wind, {weather_data['conditions']}")
             
             return weather_data
-            
+        
+        except requests.exceptions.Timeout:
+            logger.error(f"⏱️ Weather API timeout for {city} - using defaults")
+            return self._get_default_weather()
+        
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.error(f"🔑 Invalid API key for {city} - using defaults")
+            elif e.response.status_code == 404:
+                logger.error(f"🌍 City not found: {city} - using defaults")
+            else:
+                logger.error(f"❌ HTTP error for {city}: {e.response.status_code} - using defaults")
+            return self._get_default_weather()
+        
+        except requests.exceptions.RequestException as e:
+            logger.error(f"🌐 Network error for {city}: {e} - using defaults")
+            return self._get_default_weather()
+        
+        except KeyError as e:
+            logger.error(f"📋 Weather API response parsing error for {city}: {e}")
+            return self._get_default_weather()
+        
         except Exception as e:
-            logger.error(f"Error fetching weather for {city}: {e}")
+            logger.error(f"⚠️ Unexpected weather error for {city}: {e}")
             return self._get_default_weather()
     
     def _get_default_weather(self) -> Dict:
@@ -370,6 +459,11 @@ class WeatherDataProvider:
         report += "\n" + "=" * 60 + "\n"
         
         return report
+    
+    def clear_cache(self):
+        """Clear weather cache (useful for testing or forcing fresh data)"""
+        self._weather_cache.clear()
+        logger.info("Weather cache cleared")
 
 
 # Helper function for quick integration
@@ -382,7 +476,7 @@ def add_weather_data(
     
     Args:
         players_df: Players DataFrame
-        api_key: OpenWeatherMap API key (optional)
+        api_key: OpenWeatherMap API key (optional, loads from .env)
     
     Returns:
         DataFrame with weather columns
