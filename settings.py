@@ -772,16 +772,29 @@ def print_config_summary():
     print("=" * 70)
 
 # ==============================================================================
+# COMPATIBILITY ALIASES (for import flexibility)
+# ==============================================================================
+
+# Alias for alternative import names
+Settings = DFSConfig
+
+def get_settings() -> DFSConfig:
+    """Get current settings (alias for get_config)"""
+    return get_config()
+
+# ==============================================================================
 # EXPORTS
 # ==============================================================================
 
 __all__ = [
     'DFSConfig',
+    'Settings',  # Alias for DFSConfig
     'OptimizationMode',
     'ContestType',
     'ConfigManager',
     'OPTIMIZATION_MODES',
     'get_config',
+    'get_settings',  # Alias for get_config
     'get_config_manager',
     'get_optimization_mode',
     'validate_api_key',
