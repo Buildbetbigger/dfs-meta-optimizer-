@@ -1,6 +1,14 @@
 """
-Module 5: Contest Selector
-Compares contests and recommends best entry options
+DFS Meta-Optimizer v7.0.0 - Contest Selector Module
+Intelligent contest selection and EV analysis
+
+Features:
+- Field strength estimation
+- Contest EV calculation
+- Multi-contest comparison
+- Risk-adjusted recommendations
+- Portfolio fit analysis
+- Kelly Criterion bankroll management
 """
 
 import pandas as pd
@@ -31,18 +39,19 @@ class ContestSelector:
     """
     Analyzes and recommends contests based on lineup portfolio.
     
-    Features:
-    - Contest EV calculation
-    - ROI comparison
+    NEW v7.0.0 Features:
+    - Automated contest selection
+    - Expected value optimization
+    - Kelly Criterion bankroll sizing
     - Risk-adjusted recommendations
-    - Portfolio fit analysis
+    - Portfolio-contest fit analysis
     """
     
     def __init__(self):
         """Initialize contest selector"""
-        logger.info("ContestSelector initialized")
+        logger.info("ContestSelector v7.0.0 initialized")
     
-    def _estimate_field_strength(self, contest: Contest) -> float:
+    def estimate_field_strength(self, contest: Contest) -> float:
         """
         Estimate field strength (0-100).
         
@@ -79,14 +88,14 @@ class ContestSelector:
         
         return field_strength
     
-    def _estimate_win_probability(
+    def estimate_win_probability(
         self,
         portfolio_strength: float,
         field_strength: float,
         contest_size: int
     ) -> float:
         """
-        Estimate win probability.
+        Estimate win probability based on skill edge.
         
         Args:
             portfolio_strength: Your portfolio quality (0-100)
@@ -115,7 +124,7 @@ class ContestSelector:
         
         return win_prob
     
-    def _estimate_cash_probability(
+    def estimate_cash_probability(
         self,
         portfolio_strength: float,
         field_strength: float,
@@ -172,16 +181,16 @@ class ContestSelector:
         Returns:
             Dictionary with EV metrics
         """
-        field_strength = self._estimate_field_strength(contest)
+        field_strength = self.estimate_field_strength(contest)
         
         # Estimate probabilities
-        win_prob = self._estimate_win_probability(
+        win_prob = self.estimate_win_probability(
             portfolio_strength,
             field_strength,
             contest.size
         )
         
-        cash_prob = self._estimate_cash_probability(
+        cash_prob = self.estimate_cash_probability(
             portfolio_strength,
             field_strength,
             contest.contest_type
@@ -224,7 +233,7 @@ class ContestSelector:
         num_entries: int = 20
     ) -> pd.DataFrame:
         """
-        Compare multiple contests.
+        Compare multiple contests by EV.
         
         Args:
             contests: List of contests to compare
@@ -232,7 +241,7 @@ class ContestSelector:
             num_entries: Entries per contest
         
         Returns:
-            DataFrame with comparison
+            DataFrame with comparison (sorted by ROI)
         """
         results = []
         
@@ -264,6 +273,8 @@ class ContestSelector:
         """
         Recommend best contest for your portfolio.
         
+        NEW v7.0.0: Automated contest selection!
+        
         Args:
             contests: Available contests
             portfolio_strength: Your portfolio quality
@@ -274,6 +285,9 @@ class ContestSelector:
             Dictionary with recommendation
         """
         comparison = self.compare_contests(contests, portfolio_strength, num_entries)
+        
+        if comparison.empty:
+            return {}
         
         if risk_tolerance == 'conservative':
             # Prefer high cash rate
@@ -290,6 +304,9 @@ class ContestSelector:
             recommendation,
             risk_tolerance
         )
+        
+        logger.info(f"Recommended: {recommendation['contest_name']} "
+                   f"(ROI: {recommendation['roi']:.1f}%)")
         
         return recommendation
     
@@ -325,13 +342,12 @@ class ContestSelector:
         
         Args:
             contest: Contest to analyze
-            portfolio_stats: Portfolio statistics
+            portfolio_stats: Portfolio statistics from VarianceAnalyzer
         
         Returns:
             Dictionary with fit analysis
         """
         # Extract portfolio stats
-        avg_ceiling = portfolio_stats.get('avg_ceiling', 180)
         variance_profile = portfolio_stats.get('risk_classification', 'balanced')
         
         # Determine fit
@@ -380,13 +396,15 @@ class ContestSelector:
         """
         Calculate optimal entry size using Kelly Criterion.
         
+        NEW v7.0.0: Professional bankroll management!
+        
         Args:
             contest_ev: Contest EV from calculate_contest_ev
             bankroll: Your total bankroll
             kelly_fraction: Fraction of Kelly to use (0.25 = quarter Kelly)
         
         Returns:
-            Recommended entry amount
+            Recommended number of entries
         """
         roi = contest_ev['roi'] / 100
         entry_fee = contest_ev['entry_fee']
@@ -395,7 +413,6 @@ class ContestSelector:
             return 0  # No edge, don't play
         
         # Simplified Kelly: f = edge / odds
-        # For DFS: f = roi / 1
         kelly_pct = roi * kelly_fraction
         
         # Recommended amount
@@ -407,6 +424,8 @@ class ContestSelector:
         # Cap at reasonable maximum (10% of bankroll)
         max_entries = int((bankroll * 0.1) / entry_fee)
         num_entries = min(num_entries, max_entries)
+        
+        logger.info(f"Kelly recommends {num_entries} entries for ${bankroll:.2f} bankroll")
         
         return num_entries
     
@@ -442,11 +461,12 @@ class ContestSelector:
             report += "\n"
         
         # Recommendation
-        best = comparison_df.iloc[0]
-        report += "RECOMMENDATION:\n"
-        report += f"  Best Contest: {best['contest_name']}\n"
-        report += f"  Expected ROI: {best['roi']:.1f}%\n"
-        report += f"  Total Investment: ${best['total_cost']:.2f}\n"
+        if not comparison_df.empty:
+            best = comparison_df.iloc[0]
+            report += "RECOMMENDATION:\n"
+            report += f"  Best Contest: {best['contest_name']}\n"
+            report += f"  Expected ROI: {best['roi']:.1f}%\n"
+            report += f"  Total Investment: ${best['total_cost']:.2f}\n"
         
         report += "\n" + "=" * 70 + "\n"
         
