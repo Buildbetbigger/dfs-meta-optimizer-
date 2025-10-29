@@ -1,7 +1,15 @@
 """
-DFS Meta-Optimizer - Main Application v6.2.0
+DFS Meta-Optimizer - Main Application v6.3.0
 
-NEW IN v6.2.0 UI:
+NEW IN v6.3.0 UI:
+- Ownership Prediction Dashboard (predict ownership %)
+- News Feed Monitor (manual news entry & alerts)
+- Vegas Lines Dashboard (spreads, totals, implied totals)
+- Real-Time Data Integration Controls
+- Chalk & Leverage Play Identification
+- Injury Report Dashboard
+
+v6.2.0 Features (Retained):
 - Exposure Rule Builder (hard/soft caps)
 - Exposure Report Dashboard with compliance indicators
 - Tiered Portfolio Generation (safe/balanced/contrarian)
@@ -31,18 +39,30 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from optimization_engine_v6 import (
+    from optimization_engine import (
         optimize_lineups,
         CONTEST_PRESETS,
         CorrelationMatrix,
         StackAnalyzer,
         StackingReport,
         LineupFilter,
-        ExposureManager
+        ExposureManager,
+        OwnershipTracker
     )
-    from opponent_modeling import create_opponent_model, GameInfo
+    from opponent_modeling import (
+        create_opponent_model,
+        GameInfo,
+        NewsFeedMonitor,
+        VegasLinesTracker
+    )
     from claude_assistant import ClaudeAssistant
     from settings import get_settings, OptimizationMode
+    from data_config import (
+        NEWS_CONFIG,
+        VEGAS_CONFIG,
+        OWNERSHIP_CONFIG,
+        get_contest_preset
+    )
 except ImportError as e:
     st.error(f"Import error: {e}")
     st.stop()
@@ -495,8 +515,8 @@ def render_stacking_report(report: Dict):
 def main():
     """Main application entry point."""
     
-    st.title("🎯 DFS Meta-Optimizer v6.2.0")
-    st.markdown("**Advanced NFL DFS Portfolio Optimization with Exposure Management**")
+    st.title("🎯 DFS Meta-Optimizer v6.3.0")
+    st.markdown("**Advanced NFL DFS Portfolio Optimization with Real-Time Data Integration**")
     st.markdown("---")
     
     # Sidebar - Configuration
@@ -590,7 +610,188 @@ def main():
     with st.expander("👀 Player Pool Preview"):
         st.dataframe(player_pool.head(10), use_container_width=True)
     
-    # AI Ownership Prediction
+    # ============================================================================
+    # v6.3.0: REAL-TIME DATA INTEGRATION
+    # ============================================================================
+    
+    st.markdown("---")
+    st.header("📡 Real-Time Data Integration (v6.3.0)")
+    
+    tab1, tab2, tab3 = st.tabs(["📰 News Monitor", "🎲 Vegas Lines", "👥 Ownership Prediction"])
+    
+    # Tab 1: News Monitor
+    with tab1:
+        st.markdown("### 📰 News Feed Monitor")
+        
+        # Initialize news monitor
+        if 'news_monitor' not in st.session_state:
+            st.session_state.news_monitor = NewsFeedMonitor(player_pool)
+        
+        news_monitor = st.session_state.news_monitor
+        
+        # Add news item
+        with st.expander("➕ Add News Item"):
+            news_player = st.selectbox("Player", player_pool['name'].tolist(), key="news_player")
+            news_headline = st.text_input("Headline", key="news_headline")
+            news_content = st.text_area("Content", key="news_content")
+            news_source = st.text_input("Source", value="manual", key="news_source")
+            
+            if st.button("Add News"):
+                if news_headline and news_content:
+                    item = news_monitor.add_news_item(
+                        player_name=news_player,
+                        headline=news_headline,
+                        content=news_content,
+                        source=news_source
+                    )
+                    if item:
+                        st.success(f"✅ Added {item.category} news (impact: {item.impact_score:.0f}/100)")
+        
+        # Display critical alerts
+        critical_news = news_monitor.get_critical_alerts()
+        if critical_news:
+            st.markdown("#### 🚨 Critical Alerts")
+            for item in critical_news[:5]:
+                st.error(f"**{item.player_name}**: {item.headline} (Impact: {item.impact_score:.0f}/100)")
+        
+        # Display injury report
+        injury_report = news_monitor.get_injury_report()
+        if not injury_report.empty:
+            st.markdown("#### 🏥 Injury Report")
+            st.dataframe(injury_report, use_container_width=True)
+    
+    # Tab 2: Vegas Lines
+    with tab2:
+        st.markdown("### 🎲 Vegas Lines Tracker")
+        
+        # Initialize Vegas tracker
+        if 'vegas_tracker' not in st.session_state:
+            st.session_state.vegas_tracker = VegasLinesTracker()
+        
+        vegas_tracker = st.session_state.vegas_tracker
+        
+        # Add game line
+        with st.expander("➕ Add Game Line"):
+            col1, col2 = st.columns(2)
+            with col1:
+                line_game_id = st.text_input("Game ID (e.g., KC@BUF)", key="line_game_id")
+                line_home = st.text_input("Home Team", key="line_home")
+                line_away = st.text_input("Away Team", key="line_away")
+            with col2:
+                line_spread = st.number_input("Spread (- = home favored)", value=0.0, step=0.5, key="line_spread")
+                line_total = st.number_input("Total", value=45.0, step=0.5, key="line_total")
+            
+            if st.button("Add Line"):
+                if line_game_id and line_home and line_away:
+                    vegas_tracker.update_line(
+                        game_id=line_game_id,
+                        home_team=line_home,
+                        away_team=line_away,
+                        spread=line_spread,
+                        total=line_total
+                    )
+                    st.success(f"✅ Added line for {line_game_id}")
+        
+        # Display current lines
+        if vegas_tracker.current_lines:
+            st.markdown("#### 📊 Current Lines & Implied Totals")
+            
+            implied_totals = vegas_tracker.get_all_implied_totals()
+            
+            lines_data = []
+            for game_id, line in vegas_tracker.current_lines.items():
+                home_implied = implied_totals.get(line.home_team, 0)
+                away_implied = implied_totals.get(line.away_team, 0)
+                
+                lines_data.append({
+                    'Game': game_id,
+                    'Spread': f"{line.spread:+.1f}",
+                    'Total': f"{line.total:.1f}",
+                    f'{line.home_team} Implied': f"{home_implied:.1f}",
+                    f'{line.away_team} Implied': f"{away_implied:.1f}"
+                })
+            
+            lines_df = pd.DataFrame(lines_data)
+            st.dataframe(lines_df, use_container_width=True)
+            
+            # Sharp money indicators
+            sharp_indicators = vegas_tracker.get_sharp_money_indicators()
+            if sharp_indicators:
+                st.markdown("#### 💰 Sharp Money Indicators")
+                for indicator in sharp_indicators:
+                    st.info(f"**{indicator['game_id']}**: {indicator['indicator']} ({indicator['movement']:+.1f})")
+    
+    # Tab 3: Ownership Prediction
+    with tab3:
+        st.markdown("### 👥 Ownership Prediction")
+        
+        # Initialize ownership tracker
+        if 'ownership_tracker' not in st.session_state:
+            st.session_state.ownership_tracker = OwnershipTracker(player_pool)
+        
+        ownership_tracker = st.session_state.ownership_tracker
+        
+        # Prediction settings
+        col1, col2 = st.columns(2)
+        with col1:
+            pred_contest_type = st.selectbox("Contest Type", ['GPP', 'CASH'], key="pred_contest")
+        with col2:
+            pred_chalk_threshold = st.number_input("Chalk Threshold %", value=25.0, step=5.0, key="chalk_threshold")
+        
+        if st.button("🔮 Predict Ownership"):
+            with st.spinner("Predicting ownership for all players..."):
+                # Get implied totals from Vegas tracker
+                implied_totals = {}
+                if 'vegas_tracker' in st.session_state:
+                    implied_totals = st.session_state.vegas_tracker.get_all_implied_totals()
+                
+                # Get news impacts
+                news_impacts = {}
+                if 'news_monitor' in st.session_state:
+                    for player_name in player_pool['name']:
+                        # Get recent news impact (simplified)
+                        news_impacts[player_name] = 0.0
+                
+                # Batch predict
+                updated_pool = ownership_tracker.batch_predict_ownership(
+                    player_pool,
+                    contest_type=pred_contest_type,
+                    vegas_implied_totals=implied_totals,
+                    news_impacts=news_impacts
+                )
+                
+                # Update player pool with predictions
+                player_pool['ownership'] = updated_pool['ownership']
+                
+                st.success("✅ Ownership predictions complete!")
+                
+                # Show distribution
+                dist = ownership_tracker.get_ownership_distribution()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Mean Ownership", f"{dist['mean']:.1f}%")
+                with col2:
+                    st.metric("High Owned (25%+)", dist['high_owned'])
+                with col3:
+                    st.metric("Medium (10-25%)", dist['medium_owned'])
+                with col4:
+                    st.metric("Low (<10%)", dist['low_owned'])
+                
+                # Chalk plays
+                chalk_plays = ownership_tracker.identify_chalk_plays(pred_chalk_threshold)
+                if chalk_plays:
+                    st.markdown("#### 🔥 Chalk Plays")
+                    chalk_df = pd.DataFrame(chalk_plays[:10])
+                    st.dataframe(chalk_df, use_container_width=True)
+                
+                # Leverage plays
+                leverage_plays = ownership_tracker.identify_leverage_plays(player_pool, 15.0)
+                if not leverage_plays.empty:
+                    st.markdown("#### 💎 Leverage Plays")
+                    st.dataframe(leverage_plays, use_container_width=True)
+    
+    # AI Ownership Prediction (Legacy)
     if use_ai and 'api_key' in locals() and api_key:
         with st.spinner("🤖 AI analyzing ownership trends..."):
             try:
