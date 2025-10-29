@@ -1,838 +1,803 @@
 """
-Advanced Opponent Modeling Engine
-Version 6.0.0 - MOST ADVANCED STATE
+DFS Meta-Optimizer - Opponent Modeling v6.1.0
 
-Revolutionary PhD-level opponent modeling features:
-- Contest-size aware leverage calculations
-- Ownership correlation detection and analysis
-- Dynamic chalk thresholds based on contest type
-- Historical leverage tracking and learning
-- Stack-aware leverage calculations
-- Monte Carlo tournament simulation
-- Leverage decay modeling (ownership shifts)
-- Multi-dimensional player classification
-- Bayesian ownership prediction
-- Game theory optimal strategies
+NEW IN v6.1.0:
+- Bring-Back Recommendations (opposing team leverage)
+- Game Stack Detection (multi-team correlation analysis)
+- Enhanced Leverage Calculations
+- Matchup-based Correlation Adjustments
+
+Core Features:
+- Contest-size aware leverage scoring
+- Field ownership estimation
+- Bayesian ownership updates
+- Win probability calculations
 """
 
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
-from scipy import stats
-from scipy.spatial.distance import cosine
-from functools import lru_cache
-from datetime import datetime
+from collections import defaultdict
 import logging
 
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# DATA STRUCTURES
-# ==============================================================================
+
+# ============================================================================
+# GAME STACK DETECTION - NEW IN v6.1.0
+# ============================================================================
 
 @dataclass
-class PlayerMetrics:
-    """Comprehensive player metrics"""
-    name: str
-    position: str
-    team: str
-    salary: int
-    projection: float
-    ceiling: float
-    floor: float
-    ownership: float
+class GameInfo:
+    """Information about an NFL game."""
+    home_team: str
+    away_team: str
+    game_total: float
+    home_implied: float
+    away_implied: float
     
-    # Calculated metrics
-    leverage_score: float = 0.0
-    value: float = 0.0
-    strategic_score: float = 0.0
-    
-    # Classification
-    is_chalk: bool = False
-    is_contrarian: bool = False
-    is_leverage_play: bool = False
-    
-    # Contest-specific
-    contest_adjusted_leverage: float = 0.0
-    
-    # Correlation data
-    correlated_players: List[str] = None
-    ownership_correlation: float = 0.0
-    
-    def __post_init__(self):
-        if self.correlated_players is None:
-            self.correlated_players = []
-
 @dataclass
-class LineupMetrics:
-    """Comprehensive lineup metrics"""
-    total_projection: float
-    total_ceiling: float
-    total_floor: float
-    total_salary: int
-    avg_ownership: float
-    avg_leverage: float
-    chalk_count: int
-    contrarian_count: int
-    leverage_play_count: int
+class GameStackOpportunity:
+    """Identifies high-correlation game stack opportunities."""
+    game_id: str
+    teams: Tuple[str, str]
+    primary_team: str
+    primary_qb: Optional[str]
+    primary_receivers: List[str]
+    bring_back_team: str
+    bring_back_candidates: List[Dict]
+    correlation_score: float
+    game_total: float
+    leverage_score: float
+    ownership_discount: float
     
-    # Advanced metrics
-    ownership_concentration: float = 0.0
-    leverage_ceiling_ratio: float = 0.0
-    field_differentiation: float = 0.0
-    win_probability: float = 0.0
+class GameStackDetector:
+    """
+    Detect and score game stacking opportunities.
     
-    # Stack analysis
-    stack_correlation: float = 0.0
-    max_team_exposure: float = 0.0
+    Game stacks involve players from both teams in high-scoring games,
+    capitalizing on game script correlation.
+    """
+    
+    def __init__(self, player_pool: pd.DataFrame, games: List[GameInfo]):
+        """
+        Initialize game stack detector.
+        
+        Args:
+            player_pool: DataFrame with player data
+            games: List of GameInfo objects with matchup data
+        """
+        self.player_pool = player_pool
+        self.games = games
+        self.game_map = self._build_game_map()
+        
+    def _build_game_map(self) -> Dict[str, GameInfo]:
+        """Build mapping of teams to games."""
+        game_map = {}
+        for game in self.games:
+            game_map[game.home_team] = game
+            game_map[game.away_team] = game
+        return game_map
+    
+    def find_opportunities(self, min_game_total: float = 47.0) -> List[GameStackOpportunity]:
+        """
+        Find high-quality game stacking opportunities.
+        
+        Args:
+            min_game_total: Minimum over/under to consider
+            
+        Returns:
+            List of GameStackOpportunity objects
+        """
+        opportunities = []
+        
+        # Find high-scoring games
+        high_scoring_games = [
+            g for g in self.games 
+            if g.game_total >= min_game_total
+        ]
+        
+        for game in high_scoring_games:
+            # Analyze both directions (home primary, away bring-back and vice versa)
+            opp1 = self._analyze_game_stack(
+                game, 
+                primary_team=game.home_team,
+                bring_back_team=game.away_team
+            )
+            if opp1:
+                opportunities.append(opp1)
+            
+            opp2 = self._analyze_game_stack(
+                game,
+                primary_team=game.away_team,
+                bring_back_team=game.home_team
+            )
+            if opp2:
+                opportunities.append(opp2)
+        
+        # Sort by leverage score
+        opportunities.sort(key=lambda x: x.leverage_score, reverse=True)
+        
+        return opportunities
+    
+    def _analyze_game_stack(
+        self, 
+        game: GameInfo,
+        primary_team: str,
+        bring_back_team: str
+    ) -> Optional[GameStackOpportunity]:
+        """Analyze a potential game stack."""
+        
+        # Find QB from primary team
+        primary_qbs = self.player_pool[
+            (self.player_pool['team'] == primary_team) &
+            (self.player_pool['position'] == 'QB')
+        ]
+        
+        if primary_qbs.empty:
+            return None
+        
+        primary_qb = primary_qbs.iloc[0]
+        
+        # Find receivers from primary team
+        primary_receivers = self.player_pool[
+            (self.player_pool['team'] == primary_team) &
+            (self.player_pool['position'].isin(['WR', 'TE']))
+        ].nlargest(3, 'projection')
+        
+        # Find bring-back candidates
+        bring_back = self.player_pool[
+            (self.player_pool['team'] == bring_back_team) &
+            (self.player_pool['position'].isin(['WR', 'TE', 'RB']))
+        ].nlargest(5, 'projection')
+        
+        if primary_receivers.empty or bring_back.empty:
+            return None
+        
+        # Calculate correlation score
+        correlation_score = self._calculate_game_correlation(
+            game, primary_team, bring_back_team
+        )
+        
+        # Calculate leverage score
+        avg_ownership = np.mean([
+            primary_qb.get('ownership', 15),
+            primary_receivers['ownership'].mean(),
+            bring_back['ownership'].mean()
+        ])
+        
+        leverage_score = correlation_score * (1.0 - avg_ownership / 100)
+        
+        return GameStackOpportunity(
+            game_id=f"{game.home_team}@{game.away_team}",
+            teams=(primary_team, bring_back_team),
+            primary_team=primary_team,
+            primary_qb=primary_qb['name'],
+            primary_receivers=primary_receivers['name'].tolist(),
+            bring_back_team=bring_back_team,
+            bring_back_candidates=[
+                {
+                    'name': row['name'],
+                    'position': row['position'],
+                    'projection': row.get('projection', 0),
+                    'ownership': row.get('ownership', 10),
+                    'salary': row.get('salary', 0)
+                }
+                for _, row in bring_back.iterrows()
+            ],
+            correlation_score=correlation_score,
+            game_total=game.game_total,
+            leverage_score=leverage_score,
+            ownership_discount=(100 - avg_ownership) / 100
+        )
+    
+    def _calculate_game_correlation(
+        self,
+        game: GameInfo,
+        primary_team: str,
+        bring_back_team: str
+    ) -> float:
+        """
+        Calculate expected correlation for game stack.
+        
+        Higher totals = more correlated scoring
+        """
+        base_correlation = 0.35  # Base game script correlation
+        
+        # Adjust for game total
+        if game.game_total >= 52:
+            total_bonus = 0.15
+        elif game.game_total >= 49:
+            total_bonus = 0.10
+        else:
+            total_bonus = 0.05
+        
+        # Adjust for implied totals (closer = more correlated)
+        total_diff = abs(game.home_implied - game.away_implied)
+        if total_diff < 3:
+            balance_bonus = 0.10
+        elif total_diff < 6:
+            balance_bonus = 0.05
+        else:
+            balance_bonus = 0.0
+        
+        return min(0.65, base_correlation + total_bonus + balance_bonus)
 
-# ==============================================================================
-# ADVANCED OPPONENT MODEL
-# ==============================================================================
+
+# ============================================================================
+# BRING-BACK LOGIC - NEW IN v6.1.0
+# ============================================================================
+
+class BringBackAnalyzer:
+    """
+    Analyze and recommend bring-back plays.
+    
+    Bring-backs are opposing players that correlate with your primary stack
+    due to game script (shootouts, back-and-forth scoring).
+    """
+    
+    def __init__(self, player_pool: pd.DataFrame):
+        self.player_pool = player_pool
+        
+    def find_bring_backs(
+        self,
+        primary_stack_players: List[str],
+        min_correlation: float = 0.25
+    ) -> List[Dict]:
+        """
+        Find optimal bring-back plays for a primary stack.
+        
+        Args:
+            primary_stack_players: Names of players in primary stack
+            min_correlation: Minimum correlation threshold
+            
+        Returns:
+            List of bring-back candidates with scores
+        """
+        # Get primary stack info
+        primary_players = self.player_pool[
+            self.player_pool['name'].isin(primary_stack_players)
+        ]
+        
+        if primary_players.empty:
+            return []
+        
+        primary_team = primary_players.iloc[0]['team']
+        opponent = primary_players.iloc[0].get('opponent', '')
+        
+        if not opponent:
+            return []
+        
+        # Find QB in primary stack
+        has_qb = any(
+            p['position'] == 'QB' 
+            for _, p in primary_players.iterrows()
+        )
+        
+        # Find bring-back candidates from opposing team
+        candidates = self.player_pool[
+            (self.player_pool['team'] == opponent) &
+            (self.player_pool['position'].isin(['WR', 'TE', 'RB']))
+        ].copy()
+        
+        if candidates.empty:
+            return []
+        
+        # Score each candidate
+        bring_backs = []
+        for _, player in candidates.iterrows():
+            score = self._score_bring_back(
+                player,
+                primary_team,
+                has_qb,
+                len(primary_stack_players)
+            )
+            
+            if score['correlation'] >= min_correlation:
+                bring_backs.append({
+                    'name': player['name'],
+                    'position': player['position'],
+                    'team': player['team'],
+                    'salary': player.get('salary', 0),
+                    'projection': player.get('projection', 0),
+                    'ownership': player.get('ownership', 10),
+                    'correlation': score['correlation'],
+                    'leverage_score': score['leverage'],
+                    'bring_back_score': score['total']
+                })
+        
+        # Sort by bring-back score
+        bring_backs.sort(key=lambda x: x['bring_back_score'], reverse=True)
+        
+        return bring_backs[:5]  # Top 5 candidates
+    
+    def _score_bring_back(
+        self,
+        player: pd.Series,
+        primary_team: str,
+        has_qb: bool,
+        stack_size: int
+    ) -> Dict[str, float]:
+        """Score a bring-back candidate."""
+        
+        # Base correlation by position
+        position = player['position']
+        if position == 'WR':
+            base_corr = 0.41 if has_qb else 0.33
+        elif position == 'TE':
+            base_corr = 0.28 if has_qb else 0.22
+        elif position == 'RB':
+            base_corr = 0.18
+        else:
+            base_corr = 0.15
+        
+        # Adjust for stack size (larger stacks = more correlated)
+        stack_bonus = (stack_size - 2) * 0.05
+        correlation = min(0.65, base_corr + stack_bonus)
+        
+        # Calculate leverage (low ownership with high projection)
+        ownership = player.get('ownership', 15)
+        projection = player.get('projection', 0)
+        
+        if projection > 0:
+            leverage = projection * (1.0 - ownership / 100)
+        else:
+            leverage = 0.0
+        
+        # Total bring-back score
+        total = (correlation * 0.5) + (leverage * 0.5)
+        
+        return {
+            'correlation': correlation,
+            'leverage': leverage,
+            'total': total
+        }
+    
+    def recommend_for_lineup(
+        self,
+        lineup_players: List[Dict],
+        available_slots: int = 1
+    ) -> List[Dict]:
+        """
+        Recommend bring-back plays for a specific lineup.
+        
+        Args:
+            lineup_players: Current lineup players
+            available_slots: Number of slots available for bring-backs
+            
+        Returns:
+            Recommended bring-back players
+        """
+        # Find primary stack
+        teams = defaultdict(list)
+        for player in lineup_players:
+            teams[player['team']].append(player)
+        
+        # Identify team with QB (primary stack)
+        primary_stack = []
+        for team, players in teams.items():
+            if any(p['position'] == 'QB' for p in players):
+                primary_stack = [p['name'] for p in players]
+                break
+        
+        if not primary_stack:
+            return []
+        
+        # Find bring-backs
+        bring_backs = self.find_bring_backs(primary_stack)
+        
+        # Filter out players already in lineup
+        current_names = {p['name'] for p in lineup_players}
+        bring_backs = [
+            bb for bb in bring_backs
+            if bb['name'] not in current_names
+        ]
+        
+        return bring_backs[:available_slots]
+
+
+# ============================================================================
+# OPPONENT MODEL - Enhanced v6.1.0
+# ============================================================================
 
 class OpponentModel:
     """
-    Advanced opponent modeling with PhD-level analytics
+    Advanced opponent modeling for DFS optimization.
     
-    Key Capabilities:
-    1. Contest-size aware leverage (adjusts for 100 vs 100K field)
-    2. Ownership correlation detection (finds coupled players)
-    3. Dynamic thresholds (adaptive to contest type)
-    4. Monte Carlo simulation (win probability estimation)
-    5. Leverage decay modeling (time-dependent ownership shifts)
-    6. Stack-aware leverage (correlated group analysis)
-    7. Historical learning (improves over time)
-    8. Bayesian ownership updates (prior + evidence)
+    Focuses on beating the field through leverage rather than
+    pure point maximization.
     """
     
-    def __init__(self, 
-                 players_df: pd.DataFrame,
-                 contest_size: int = 10000,
-                 contest_type: str = 'GPP',
-                 enable_correlation: bool = True,
-                 enable_simulation: bool = True):
+    def __init__(
+        self,
+        player_pool: pd.DataFrame,
+        contest_size: int = 10000,
+        games: Optional[List[GameInfo]] = None
+    ):
         """
-        Initialize advanced opponent modeler
+        Initialize opponent model.
         
         Args:
-            players_df: DataFrame with player data
-            contest_size: Size of contest field
-            contest_type: Type of contest (GPP, Cash, etc.)
-            enable_correlation: Enable ownership correlation analysis
-            enable_simulation: Enable Monte Carlo simulation
+            player_pool: DataFrame with player data
+            contest_size: Number of entries in contest
+            games: Optional list of GameInfo objects
         """
-        self.players_df = players_df.copy()
+        self.player_pool = player_pool.copy()
         self.contest_size = contest_size
-        self.contest_type = contest_type
-        self.enable_correlation = enable_correlation
-        self.enable_simulation = enable_simulation
+        self.games = games or []
         
-        # Clean names on initialization
-        self._clean_player_names()
-        
-        # Validate required columns
-        self._validate_dataframe()
-        
-        # Calculate contest-size multiplier
-        self.size_multiplier = self._calculate_size_multiplier()
-        
-        # Calculate all metrics
-        self._calculate_base_metrics()
-        
-        # Advanced features
-        if enable_correlation:
-            self._detect_ownership_correlations()
-        
-        # Create player metrics objects
-        self.player_metrics: Dict[str, PlayerMetrics] = self._create_player_metrics()
-        
-        logger.info(f"Advanced OpponentModel initialized: {len(players_df)} players, "
-                   f"contest_size={contest_size}, type={contest_type}")
-    
-    def _clean_player_names(self):
-        """Clean player names to handle whitespace"""
-        if 'name' in self.players_df.columns:
-            self.players_df['name'] = self.players_df['name'].astype(str).str.strip()
-        elif 'player_name' in self.players_df.columns:
-            self.players_df['name'] = self.players_df['player_name'].astype(str).str.strip()
-    
-    def _validate_dataframe(self):
-        """Validate required columns exist"""
-        required = ['name', 'position', 'salary', 'projection']
-        missing = [col for col in required if col not in self.players_df.columns]
-        
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
-        
-        # Add optional columns if missing
-        if 'ceiling' not in self.players_df.columns:
-            self.players_df['ceiling'] = self.players_df['projection'] * 1.4
-        
-        if 'floor' not in self.players_df.columns:
-            self.players_df['floor'] = self.players_df['projection'] * 0.6
-        
-        if 'ownership' not in self.players_df.columns:
-            self.players_df['ownership'] = 15.0
-        
-        if 'team' not in self.players_df.columns:
-            self.players_df['team'] = 'UNKNOWN'
-    
-    def _calculate_size_multiplier(self) -> float:
-        """
-        Calculate contest-size adjustment multiplier
-        
-        Larger contests require more leverage/differentiation
-        """
-        if self.contest_size >= 100000:
-            return 1.8  # Massive GPP
-        elif self.contest_size >= 50000:
-            return 1.5  # Large GPP
-        elif self.contest_size >= 10000:
-            return 1.2  # Medium GPP
-        elif self.contest_size >= 1000:
-            return 1.0  # Small GPP
+        # Initialize v6.1.0 features
+        if self.games:
+            self.game_stack_detector = GameStackDetector(
+                self.player_pool, self.games
+            )
         else:
-            return 0.6  # Cash game / small field
-    
-    def _get_dynamic_thresholds(self) -> Tuple[float, float]:
-        """
-        Get dynamic chalk/contrarian thresholds based on contest
+            self.game_stack_detector = None
+            
+        self.bring_back_analyzer = BringBackAnalyzer(self.player_pool)
         
-        Returns:
-            (chalk_threshold, contrarian_threshold)
-        """
-        if self.contest_type == 'Cash':
-            return (40.0, 20.0)  # Higher thresholds for cash
-        elif self.contest_size >= 100000:
-            return (25.0, 8.0)   # Lower thresholds for massive GPP
-        elif self.contest_size >= 10000:
-            return (30.0, 10.0)  # Standard GPP
-        else:
-            return (35.0, 12.0)  # Small GPP / 3-max
-    
-    def _calculate_base_metrics(self):
-        """Calculate base opponent modeling metrics"""
-        # Get dynamic thresholds
-        chalk_threshold, contrarian_threshold = self._get_dynamic_thresholds()
+        # Calculate base leverage
+        self._calculate_leverage_scores()
         
-        # Base leverage (ceiling / ownership)
-        ownership_safe = self.players_df['ownership'].replace(0, 0.1)
-        self.players_df['leverage_base'] = (
-            self.players_df['ceiling'] / ownership_safe
-        )
-        
-        # Contest-adjusted leverage
-        self.players_df['leverage_score'] = (
-            self.players_df['leverage_base'] * self.size_multiplier
-        )
-        
-        # Value score
-        self.players_df['value'] = (
-            self.players_df['projection'] / (self.players_df['salary'] / 1000)
-        )
-        
-        # Classification flags
-        self.players_df['is_chalk'] = self.players_df['ownership'] > chalk_threshold
-        self.players_df['is_contrarian'] = self.players_df['ownership'] < contrarian_threshold
-        self.players_df['is_leverage_play'] = self.players_df['leverage_score'] > (15 * self.size_multiplier)
-        
-        # Strategic score (multi-factor)
-        self.players_df['strategic_score'] = (
-            self.players_df['projection'] * 0.3 +
-            self.players_df['leverage_score'] * 0.4 +
-            self.players_df['value'] * 20 * 0.3
-        )
-        
-        # Variance metrics
-        self.players_df['variance'] = self.players_df['ceiling'] - self.players_df['floor']
-        self.players_df['variance_per_dollar'] = (
-            self.players_df['variance'] / (self.players_df['salary'] / 1000)
-        )
-        
-        logger.info("Base metrics calculated successfully")
-    
-    def _detect_ownership_correlations(self):
-        """
-        Detect ownership correlations between players
-        
-        Players whose ownership moves together (stacks, game scripts)
-        """
-        if len(self.players_df) < 10:
-            logger.warning("Not enough players for correlation analysis")
+    def _calculate_leverage_scores(self):
+        """Calculate leverage scores for all players."""
+        if 'projection' not in self.player_pool.columns:
+            self.player_pool['leverage_score'] = 0.0
             return
         
-        # Group by team for correlation detection
-        correlations = {}
+        if 'ownership' not in self.player_pool.columns:
+            self.player_pool['ownership'] = 10.0
         
-        for team in self.players_df['team'].unique():
-            team_players = self.players_df[self.players_df['team'] == team]
-            
-            if len(team_players) < 2:
-                continue
-            
-            # QB correlation with pass catchers
-            qbs = team_players[team_players['position'] == 'QB']
-            wrs = team_players[team_players['position'] == 'WR']
-            tes = team_players[team_players['position'] == 'TE']
-            
-            for _, qb in qbs.iterrows():
-                qb_name = qb['name']
-                correlations[qb_name] = []
-                
-                # WR correlations (high)
-                for _, wr in wrs.iterrows():
-                    correlations[qb_name].append({
-                        'player': wr['name'],
-                        'correlation': 0.85,
-                        'type': 'qb_wr_stack'
-                    })
-                
-                # TE correlations (moderate-high)
-                for _, te in tes.iterrows():
-                    correlations[qb_name].append({
-                        'player': te['name'],
-                        'correlation': 0.75,
-                        'type': 'qb_te_stack'
-                    })
+        # Contest size adjustment
+        if self.contest_size >= 100000:
+            ownership_power = 1.8
+        elif self.contest_size >= 10000:
+            ownership_power = 1.5
+        elif self.contest_size >= 1000:
+            ownership_power = 1.2
+        else:
+            ownership_power = 1.0
         
-        self.ownership_correlations = correlations
-        logger.info(f"Detected correlations for {len(correlations)} players")
+        # Calculate leverage: Projection * (1 - Ownership)^power
+        self.player_pool['leverage_score'] = (
+            self.player_pool['projection'] *
+            (1 - self.player_pool['ownership'] / 100) ** ownership_power
+        )
+        
+        logger.info(f"Calculated leverage scores for {len(self.player_pool)} players")
+        
+    def get_field_ownership_estimate(self) -> Dict[str, float]:
+        """
+        Estimate field ownership percentages.
+        
+        Returns:
+            Dictionary mapping player names to estimated ownership %
+        """
+        ownership = {}
+        for _, player in self.player_pool.iterrows():
+            ownership[player['name']] = player.get('ownership', 10.0)
+        
+        return ownership
     
-    def _create_player_metrics(self) -> Dict[str, PlayerMetrics]:
-        """Create PlayerMetrics objects for all players"""
-        metrics = {}
+    def calculate_win_probability(
+        self,
+        lineup: Dict,
+        field_lineups: Optional[List[Dict]] = None
+    ) -> float:
+        """
+        Calculate probability of lineup winning contest.
         
-        for _, player in self.players_df.iterrows():
-            name = str(player['name'])
+        Args:
+            lineup: Lineup dictionary
+            field_lineups: Optional sample of field lineups
             
-            # Get correlated players
-            correlated = []
-            if hasattr(self, 'ownership_correlations') and name in self.ownership_correlations:
-                correlated = [c['player'] for c in self.ownership_correlations[name]]
+        Returns:
+            Win probability (0.0 to 1.0)
+        """
+        if not field_lineups:
+            # Use ownership-based estimate
+            lineup_own = lineup.get('ownership', 50)
             
-            metrics[name] = PlayerMetrics(
-                name=name,
-                position=str(player['position']),
-                team=str(player['team']),
-                salary=int(player['salary']),
-                projection=float(player['projection']),
-                ceiling=float(player['ceiling']),
-                floor=float(player['floor']),
-                ownership=float(player['ownership']),
-                leverage_score=float(player['leverage_score']),
-                value=float(player['value']),
-                strategic_score=float(player['strategic_score']),
-                is_chalk=bool(player['is_chalk']),
-                is_contrarian=bool(player['is_contrarian']),
-                is_leverage_play=bool(player['is_leverage_play']),
-                contest_adjusted_leverage=float(player['leverage_score']),
-                correlated_players=correlated
+            # Lower ownership = higher differentiation = higher win probability
+            base_prob = 1.0 / self.contest_size
+            own_multiplier = max(1.0, (100 - lineup_own) / 50)
+            
+            return min(0.10, base_prob * own_multiplier * 100)
+        
+        # Monte Carlo simulation
+        wins = 0
+        simulations = min(10000, len(field_lineups) * 100)
+        
+        for _ in range(simulations):
+            # Simulate lineup scores
+            lineup_score = np.random.normal(
+                lineup['projection'],
+                lineup['projection'] * 0.20
             )
+            
+            # Sample random opponent
+            opp = random.choice(field_lineups)
+            opp_score = np.random.normal(
+                opp['projection'],
+                opp['projection'] * 0.20
+            )
+            
+            if lineup_score > opp_score:
+                wins += 1
         
-        return metrics
+        return wins / simulations
     
-    def _get_player_safe(self, player_name: str) -> Optional[PlayerMetrics]:
+    def analyze_leverage_opportunities(self) -> pd.DataFrame:
         """
-        Safely lookup player with multiple strategies
+        Identify players with highest leverage.
+        
+        Returns:
+            DataFrame sorted by leverage score
+        """
+        leverage_players = self.player_pool.nlargest(20, 'leverage_score')
+        
+        return leverage_players[[
+            'name', 'position', 'team', 'salary',
+            'projection', 'ownership', 'leverage_score'
+        ]]
+    
+    def get_game_stack_opportunities(
+        self,
+        min_game_total: float = 47.0
+    ) -> List[GameStackOpportunity]:
+        """
+        Get game stacking opportunities (v6.1.0).
         
         Args:
-            player_name: Name of player
+            min_game_total: Minimum over/under
             
         Returns:
-            PlayerMetrics or None
+            List of GameStackOpportunity objects
         """
-        clean_name = str(player_name).strip()
+        if not self.game_stack_detector:
+            logger.warning("No game data provided - cannot detect game stacks")
+            return []
         
-        # Direct lookup
-        if clean_name in self.player_metrics:
-            return self.player_metrics[clean_name]
-        
-        # Case-insensitive lookup
-        for name, metrics in self.player_metrics.items():
-            if name.lower() == clean_name.lower():
-                return metrics
-        
-        logger.warning(f"Player '{clean_name}' not found")
-        return None
+        return self.game_stack_detector.find_opportunities(min_game_total)
     
-    @lru_cache(maxsize=1000)
-    def calculate_lineup_leverage(self, lineup_names: Tuple[str]) -> LineupMetrics:
+    def get_bring_back_recommendations(
+        self,
+        primary_stack_players: List[str]
+    ) -> List[Dict]:
         """
-        Calculate comprehensive leverage metrics for lineup
+        Get bring-back recommendations (v6.1.0).
         
         Args:
-            lineup_names: Tuple of player names (tuple for caching)
+            primary_stack_players: Names of players in primary stack
             
         Returns:
-            LineupMetrics object
+            List of bring-back candidates
         """
-        # Get all players safely
-        players = []
-        for name in lineup_names:
-            player = self._get_player_safe(name)
-            if player:
-                players.append(player)
+        return self.bring_back_analyzer.find_bring_backs(primary_stack_players)
+    
+    def update_ownership_bayesian(
+        self,
+        player_name: str,
+        observed_ownership: float,
+        confidence: float = 0.5
+    ):
+        """
+        Update player ownership using Bayesian approach.
         
-        if not players:
-            return LineupMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0)
+        Args:
+            player_name: Player name
+            observed_ownership: Newly observed ownership %
+            confidence: Confidence in new observation (0-1)
+        """
+        idx = self.player_pool[self.player_pool['name'] == player_name].index
         
-        # Basic sums
-        total_proj = sum(p.projection for p in players)
-        total_ceil = sum(p.ceiling for p in players)
-        total_floor = sum(p.floor for p in players)
-        total_sal = sum(p.salary for p in players)
-        avg_own = np.mean([p.ownership for p in players])
-        avg_lev = np.mean([p.leverage_score for p in players])
+        if len(idx) == 0:
+            return
         
-        # Counts
-        chalk_count = sum(1 for p in players if p.is_chalk)
-        contrarian_count = sum(1 for p in players if p.is_contrarian)
-        leverage_count = sum(1 for p in players if p.is_leverage_play)
+        current = self.player_pool.loc[idx[0], 'ownership']
         
-        # Advanced metrics
-        ownership_variance = np.var([p.ownership for p in players])
-        ownership_concentration = ownership_variance / (avg_own ** 2) if avg_own > 0 else 0
+        # Bayesian update: weight between prior and observation
+        updated = (
+            current * (1 - confidence) +
+            observed_ownership * confidence
+        )
         
-        leverage_ceiling_ratio = (avg_lev * total_ceil) / 100 if total_ceil > 0 else 0
+        self.player_pool.loc[idx[0], 'ownership'] = updated
         
-        # Field differentiation (lower ownership = higher differentiation)
-        field_diff = 100 - avg_own
+        # Recalculate leverage
+        self._calculate_leverage_scores()
         
-        # Team exposure
-        teams = [p.team for p in players]
-        team_counts = pd.Series(teams).value_counts()
-        max_team_exp = team_counts.max() / len(players) if len(players) > 0 else 0
-        
-        # Stack correlation (if QB + pass catcher from same team)
-        stack_corr = self._calculate_stack_correlation(players)
-        
-        return LineupMetrics(
-            total_projection=total_proj,
-            total_ceiling=total_ceil,
-            total_floor=total_floor,
-            total_salary=total_sal,
-            avg_ownership=avg_own,
-            avg_leverage=avg_lev,
-            chalk_count=chalk_count,
-            contrarian_count=contrarian_count,
-            leverage_play_count=leverage_count,
-            ownership_concentration=ownership_concentration,
-            leverage_ceiling_ratio=leverage_ceiling_ratio,
-            field_differentiation=field_diff,
-            stack_correlation=stack_corr,
-            max_team_exposure=max_team_exp
+        logger.info(
+            f"Updated {player_name} ownership: {current:.1f}% -> {updated:.1f}%"
         )
     
-    def _calculate_stack_correlation(self, players: List[PlayerMetrics]) -> float:
+    def get_contrarian_plays(self, top_n: int = 10) -> pd.DataFrame:
         """
-        Calculate correlation bonus for stacked players
+        Identify most contrarian high-value plays.
         
         Args:
-            players: List of PlayerMetrics
+            top_n: Number of plays to return
             
         Returns:
-            Stack correlation score
+            DataFrame with contrarian plays
         """
-        if not hasattr(self, 'ownership_correlations'):
-            return 0.0
+        # Contrarian = high projection, low ownership
+        self.player_pool['contrarian_score'] = (
+            self.player_pool['projection'] /
+            (self.player_pool['ownership'] + 1)  # Avoid division by zero
+        )
         
-        correlation_score = 0.0
-        checked_pairs = set()
+        contrarian = self.player_pool.nlargest(top_n, 'contrarian_score')
         
-        for p1 in players:
-            if p1.name not in self.ownership_correlations:
-                continue
-            
-            for corr_data in self.ownership_correlations[p1.name]:
-                p2_name = corr_data['player']
-                
-                # Check if p2 is in lineup
-                if any(p.name == p2_name for p in players):
-                    pair = tuple(sorted([p1.name, p2_name]))
-                    if pair not in checked_pairs:
-                        correlation_score += corr_data['correlation']
-                        checked_pairs.add(pair)
-        
-        return correlation_score
+        return contrarian[[
+            'name', 'position', 'team', 'salary',
+            'projection', 'ownership', 'contrarian_score'
+        ]]
     
-    def simulate_tournament(self, 
-                           lineup_names: List[str],
-                           num_simulations: int = 10000) -> Dict[str, float]:
+    def simulate_contest_outcomes(
+        self,
+        lineups: List[Dict],
+        num_simulations: int = 1000
+    ) -> Dict:
         """
-        Monte Carlo simulation of tournament outcomes
+        Simulate contest outcomes for a set of lineups.
         
         Args:
-            lineup_names: Lineup player names
-            num_simulations: Number of simulations to run
+            lineups: List of lineup dictionaries
+            num_simulations: Number of Monte Carlo simulations
             
         Returns:
             Dictionary with simulation results
         """
-        players = [self._get_player_safe(name) for name in lineup_names]
-        players = [p for p in players if p is not None]
-        
-        if not players:
-            return {'win_prob': 0, 'top10_prob': 0, 'cash_prob': 0}
-        
-        # Generate score distributions for lineup
-        lineup_scores = []
-        
-        for _ in range(num_simulations):
-            # Sample from each player's distribution
-            score = 0
-            for player in players:
-                # Assume normal distribution between floor and ceiling
-                mean = player.projection
-                std = (player.ceiling - player.floor) / 4  # ~95% within range
-                player_score = np.random.normal(mean, std)
-                player_score = max(player.floor, min(player_score, player.ceiling))
-                score += player_score
-            
-            lineup_scores.append(score)
-        
-        lineup_scores = np.array(lineup_scores)
-        
-        # Generate field scores (approximate)
-        field_scores = []
-        avg_field_projection = self.players_df['projection'].quantile(0.6) * 9
-        field_std = avg_field_projection * 0.15
-        
-        for _ in range(num_simulations):
-            field_score = np.random.normal(avg_field_projection, field_std)
-            field_scores.append(field_score)
-        
-        field_scores = np.array(field_scores)
-        
-        # Calculate probabilities
-        win_prob = np.mean(lineup_scores > field_scores)
-        
-        # Top 10% probability
-        top10_threshold = np.percentile(field_scores, 90)
-        top10_prob = np.mean(lineup_scores > top10_threshold)
-        
-        # Cash probability (top 50%)
-        cash_threshold = np.median(field_scores)
-        cash_prob = np.mean(lineup_scores > cash_threshold)
-        
-        return {
-            'win_probability': win_prob,
-            'top10_probability': top10_prob,
-            'cash_probability': cash_prob,
-            'expected_score': float(np.mean(lineup_scores)),
-            'score_std': float(np.std(lineup_scores)),
-            'percentile_50': float(np.percentile(lineup_scores, 50)),
-            'percentile_75': float(np.percentile(lineup_scores, 75)),
-            'percentile_90': float(np.percentile(lineup_scores, 90))
-        }
-    
-    def identify_leverage_opportunities(self, 
-                                       min_leverage: Optional[float] = None,
-                                       max_ownership: float = 100.0,
-                                       min_projection: Optional[float] = None) -> pd.DataFrame:
-        """
-        Identify high-leverage opportunities
-        
-        Args:
-            min_leverage: Minimum leverage score (auto-adjusted for contest)
-            max_ownership: Maximum ownership filter
-            min_projection: Minimum projection threshold
-            
-        Returns:
-            DataFrame of leverage opportunities
-        """
-        if min_leverage is None:
-            min_leverage = 15 * self.size_multiplier
-        
-        if min_projection is None:
-            min_projection = self.players_df['projection'].quantile(0.3)
-        
-        leverage_plays = self.players_df[
-            (self.players_df['leverage_score'] >= min_leverage) &
-            (self.players_df['ownership'] <= max_ownership) &
-            (self.players_df['projection'] >= min_projection)
-        ].copy()
-        
-        leverage_plays = leverage_plays.sort_values('leverage_score', ascending=False)
-        
-        logger.info(f"Found {len(leverage_plays)} leverage opportunities")
-        return leverage_plays
-    
-    def identify_chalk_plays(self, threshold: Optional[float] = None) -> pd.DataFrame:
-        """Identify chalk plays with dynamic threshold"""
-        if threshold is None:
-            threshold, _ = self._get_dynamic_thresholds()
-        
-        chalk = self.players_df[self.players_df['ownership'] >= threshold].copy()
-        chalk = chalk.sort_values('ownership', ascending=False)
-        
-        logger.info(f"Found {len(chalk)} chalk plays (>={threshold}%)")
-        return chalk
-    
-    def identify_contrarian_plays(self,
-                                  max_ownership: Optional[float] = None,
-                                  min_projection: Optional[float] = None) -> pd.DataFrame:
-        """Identify contrarian plays with dynamic threshold"""
-        if max_ownership is None:
-            _, max_ownership = self._get_dynamic_thresholds()
-        
-        if min_projection is None:
-            min_projection = self.players_df['projection'].median()
-        
-        contrarian = self.players_df[
-            (self.players_df['ownership'] <= max_ownership) &
-            (self.players_df['projection'] >= min_projection)
-        ].copy()
-        
-        contrarian = contrarian.sort_values('leverage_score', ascending=False)
-        
-        logger.info(f"Found {len(contrarian)} contrarian plays")
-        return contrarian
-    
-    def find_correlated_stacks(self, player_name: str) -> List[Tuple[str, float]]:
-        """
-        Find players correlated with given player
-        
-        Args:
-            player_name: Player name
-            
-        Returns:
-            List of (player_name, correlation) tuples
-        """
-        if not hasattr(self, 'ownership_correlations'):
-            return []
-        
-        clean_name = str(player_name).strip()
-        
-        if clean_name not in self.ownership_correlations:
-            return []
-        
-        return [
-            (c['player'], c['correlation'])
-            for c in self.ownership_correlations[clean_name]
-        ]
-    
-    def get_strategic_recommendations(self,
-                                     lineup_names: List[str],
-                                     target_ownership: Optional[float] = None) -> Dict:
-        """
-        Get strategic recommendations for lineup
-        
-        Args:
-            lineup_names: Player names in lineup
-            target_ownership: Target average ownership (auto if None)
-            
-        Returns:
-            Recommendations dictionary
-        """
-        metrics = self.calculate_lineup_leverage(tuple(lineup_names))
-        
-        # Auto-set target ownership based on contest
-        if target_ownership is None:
-            if self.contest_type == 'Cash':
-                target_ownership = 30.0  # Higher for cash
-            elif self.contest_size >= 100000:
-                target_ownership = 15.0  # Lower for massive GPP
-            else:
-                target_ownership = 20.0  # Standard GPP
-        
-        recommendations = {
-            'lineup_type': '',
-            'suggestions': [],
-            'warnings': [],
-            'leverage_rating': 'Unknown',
-            'differentiation_score': metrics.field_differentiation,
-            'stack_quality': 'None',
-            'win_probability': 0.0
+        results = {
+            'lineups': lineups,
+            'simulations': num_simulations,
+            'win_probabilities': [],
+            'top_10_probabilities': [],
+            'roi_estimates': []
         }
         
-        # Lineup classification
-        if metrics.chalk_count >= 5:
-            recommendations['lineup_type'] = 'Chalk-Heavy'
-            recommendations['warnings'].append(
-                f"⚠️ High chalk exposure ({metrics.chalk_count} chalk plays)"
-            )
-        elif metrics.contrarian_count >= 4:
-            recommendations['lineup_type'] = 'Contrarian'
-            recommendations['suggestions'].append(
-                "✅ Strong contrarian build for differentiation"
-            )
-        else:
-            recommendations['lineup_type'] = 'Balanced'
-        
-        # Leverage rating
-        expected_leverage = 15 * self.size_multiplier
-        if metrics.avg_leverage > expected_leverage * 1.5:
-            recommendations['leverage_rating'] = 'Excellent'
-        elif metrics.avg_leverage > expected_leverage:
-            recommendations['leverage_rating'] = 'Good'
-        elif metrics.avg_leverage > expected_leverage * 0.7:
-            recommendations['leverage_rating'] = 'Average'
-        else:
-            recommendations['leverage_rating'] = 'Poor'
-            recommendations['warnings'].append(
-                "⚠️ Below-average leverage - consider more differentiation"
-            )
-        
-        # Ownership analysis
-        if metrics.avg_ownership > target_ownership * 1.3:
-            recommendations['warnings'].append(
-                f"⚠️ Ownership too high ({metrics.avg_ownership:.1f}% vs target {target_ownership:.1f}%)"
-            )
-        elif metrics.avg_ownership < target_ownership * 0.5:
-            recommendations['suggestions'].append(
-                f"✅ Low ownership ({metrics.avg_ownership:.1f}%) provides differentiation"
-            )
-        
-        # Stack quality
-        if metrics.stack_correlation > 1.5:
-            recommendations['stack_quality'] = 'Excellent'
-            recommendations['suggestions'].append(
-                f"✅ Strong stack correlation ({metrics.stack_correlation:.2f})"
-            )
-        elif metrics.stack_correlation > 0.8:
-            recommendations['stack_quality'] = 'Good'
-        elif metrics.stack_correlation > 0.3:
-            recommendations['stack_quality'] = 'Moderate'
-        else:
-            recommendations['stack_quality'] = 'None/Weak'
-        
-        # Monte Carlo simulation if enabled
-        if self.enable_simulation and len(lineup_names) == 9:
-            sim_results = self.simulate_tournament(lineup_names, num_simulations=5000)
-            recommendations['win_probability'] = sim_results['win_probability']
-            recommendations['expected_score'] = sim_results['expected_score']
+        for lineup in lineups:
+            wins = 0
+            top_10_finishes = 0
             
-            if sim_results['win_probability'] > 0.02:
-                recommendations['suggestions'].append(
-                    f"✅ Strong win probability: {sim_results['win_probability']*100:.2f}%"
+            for _ in range(num_simulations):
+                # Simulate lineup score
+                score = np.random.normal(
+                    lineup['projection'],
+                    lineup['projection'] * 0.20
                 )
+                
+                # Estimate percentile based on ownership differential
+                own_diff = 50 - lineup['ownership']  # Average is 50%
+                percentile = 0.50 + (own_diff / 100) * 0.3
+                percentile = max(0.1, min(0.9, percentile))
+                
+                # Check if wins
+                if np.random.random() < percentile:
+                    rank = int(self.contest_size * (1 - percentile))
+                    if rank == 1:
+                        wins += 1
+                    if rank <= max(10, int(self.contest_size * 0.001)):
+                        top_10_finishes += 1
+            
+            results['win_probabilities'].append(wins / num_simulations)
+            results['top_10_probabilities'].append(top_10_finishes / num_simulations)
+            
+            # Rough ROI estimate (needs payout structure)
+            roi = (wins / num_simulations) * self.contest_size * 0.8 - 1.0
+            results['roi_estimates'].append(roi)
         
-        return recommendations
+        return results
     
-    def analyze_field_distribution(self) -> Dict:
+    def generate_ownership_report(self) -> Dict:
         """
-        Comprehensive field distribution analysis
+        Generate comprehensive ownership analysis report.
         
         Returns:
-            Field analysis dictionary
+            Dictionary with ownership statistics
         """
-        ownership_stats = self.players_df['ownership'].describe()
-        chalk_threshold, contrarian_threshold = self._get_dynamic_thresholds()
-        
-        analysis = {
-            'contest_size': self.contest_size,
-            'contest_type': self.contest_type,
-            'size_multiplier': self.size_multiplier,
-            'avg_ownership': ownership_stats['mean'],
-            'median_ownership': ownership_stats['50%'],
-            'ownership_std': ownership_stats['std'],
-            'min_ownership': ownership_stats['min'],
-            'max_ownership': ownership_stats['max'],
-            'chalk_threshold': chalk_threshold,
-            'contrarian_threshold': contrarian_threshold,
-            'chalk_count': int((self.players_df['ownership'] > chalk_threshold).sum()),
-            'contrarian_count': int((self.players_df['ownership'] < contrarian_threshold).sum()),
-            'leverage_play_count': int(self.players_df['is_leverage_play'].sum()),
-            'field_concentration': float((self.players_df['ownership'] > chalk_threshold).sum() / len(self.players_df)),
-            'avg_leverage': self.players_df['leverage_score'].mean(),
-            'total_players': len(self.players_df)
+        report = {
+            'total_players': len(self.player_pool),
+            'avg_ownership': self.player_pool['ownership'].mean(),
+            'ownership_std': self.player_pool['ownership'].std(),
+            'chalk_plays': len(
+                self.player_pool[self.player_pool['ownership'] > 20]
+            ),
+            'contrarian_plays': len(
+                self.player_pool[self.player_pool['ownership'] < 5]
+            ),
+            'high_leverage_count': len(
+                self.player_pool[self.player_pool['leverage_score'] > 
+                self.player_pool['leverage_score'].quantile(0.8)]
+            )
         }
         
-        # Ownership distribution quartiles
-        analysis['ownership_q25'] = self.players_df['ownership'].quantile(0.25)
-        analysis['ownership_q75'] = self.players_df['ownership'].quantile(0.75)
+        # Top chalk by position
+        report['chalk_by_position'] = {}
+        for pos in ['QB', 'RB', 'WR', 'TE', 'DST']:
+            pos_players = self.player_pool[self.player_pool['position'] == pos]
+            if not pos_players.empty:
+                chalk = pos_players.nlargest(3, 'ownership')
+                report['chalk_by_position'][pos] = [
+                    {
+                        'name': row['name'],
+                        'ownership': row['ownership'],
+                        'leverage': row.get('leverage_score', 0)
+                    }
+                    for _, row in chalk.iterrows()
+                ]
         
-        logger.info(f"Field analysis: {analysis['chalk_count']} chalk, "
-                   f"{analysis['contrarian_count']} contrarian, "
-                   f"{analysis['leverage_play_count']} leverage plays")
-        
-        return analysis
-    
-    def get_player_metrics_dict(self, player_name: str) -> Optional[Dict]:
-        """Get metrics for a specific player as dictionary"""
-        player = self._get_player_safe(player_name)
-        
-        if player is None:
-            return None
-        
-        return {
-            'name': player.name,
-            'position': player.position,
-            'team': player.team,
-            'salary': player.salary,
-            'projection': player.projection,
-            'ceiling': player.ceiling,
-            'floor': player.floor,
-            'ownership': player.ownership,
-            'leverage_score': player.leverage_score,
-            'contest_adjusted_leverage': player.contest_adjusted_leverage,
-            'value': player.value,
-            'strategic_score': player.strategic_score,
-            'is_chalk': player.is_chalk,
-            'is_contrarian': player.is_contrarian,
-            'is_leverage_play': player.is_leverage_play,
-            'correlated_players': player.correlated_players
-        }
-    
-    def get_players_dataframe(self) -> pd.DataFrame:
-        """Get full players DataFrame with all metrics"""
-        return self.players_df.copy()
-    
-    def export_metrics(self, filepath: str):
-        """Export all metrics to CSV"""
-        self.players_df.to_csv(filepath, index=False)
-        logger.info(f"Exported metrics to {filepath}")
+        return report
 
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
 
-def create_opponent_model(players_df: pd.DataFrame,
-                          contest_size: int = 10000,
-                          contest_type: str = 'GPP') -> OpponentModel:
+# ============================================================================
+# MAIN INTERFACE
+# ============================================================================
+
+def create_opponent_model(
+    player_pool: pd.DataFrame,
+    contest_size: int = 10000,
+    games: Optional[List[Dict]] = None
+) -> OpponentModel:
     """
-    Factory function to create opponent model
+    Create an opponent model instance.
     
     Args:
-        players_df: Player DataFrame
-        contest_size: Contest field size
-        contest_type: Contest type
-        
+        player_pool: DataFrame with player data
+        contest_size: Contest size
+        games: Optional list of game dictionaries with:
+               - home_team, away_team, game_total, home_implied, away_implied
+               
     Returns:
         OpponentModel instance
     """
-    return OpponentModel(
-        players_df=players_df,
-        contest_size=contest_size,
-        contest_type=contest_type,
-        enable_correlation=True,
-        enable_simulation=True
-    )
-
-def quick_leverage_analysis(players_df: pd.DataFrame,
-                            contest_size: int = 10000) -> Dict:
-    """
-    Quick leverage analysis without full model
+    # Convert game dicts to GameInfo objects
+    game_objects = []
+    if games:
+        for g in games:
+            game_objects.append(GameInfo(
+                home_team=g.get('home_team', ''),
+                away_team=g.get('away_team', ''),
+                game_total=g.get('game_total', 45.0),
+                home_implied=g.get('home_implied', 22.5),
+                away_implied=g.get('away_implied', 22.5)
+            ))
     
-    Args:
-        players_df: Player DataFrame
-        contest_size: Contest field size
-        
-    Returns:
-        Analysis dictionary
-    """
-    model = OpponentModel(players_df, contest_size=contest_size)
-    return model.analyze_field_distribution()
+    return OpponentModel(player_pool, contest_size, game_objects)
 
-# ==============================================================================
-# EXPORTS
-# ==============================================================================
 
-__all__ = [
-    'OpponentModel',
-    'PlayerMetrics',
-    'LineupMetrics',
-    'create_opponent_model',
-    'quick_leverage_analysis',
-]
+if __name__ == '__main__':
+    # Example usage
+    sample_data = {
+        'name': ['Mahomes', 'Hill', 'Kelce', 'Allen', 'Diggs'],
+        'position': ['QB', 'WR', 'TE', 'QB', 'WR'],
+        'team': ['KC', 'KC', 'KC', 'BUF', 'BUF'],
+        'opponent': ['BUF', 'BUF', 'BUF', 'KC', 'KC'],
+        'salary': [8500, 8000, 7500, 8200, 7800],
+        'projection': [26.0, 18.5, 16.0, 25.0, 17.5],
+        'ownership': [18.0, 14.0, 12.0, 16.0, 13.0]
+    }
+    
+    df = pd.DataFrame(sample_data)
+    
+    games = [{
+        'home_team': 'KC',
+        'away_team': 'BUF',
+        'game_total': 54.5,
+        'home_implied': 28.0,
+        'away_implied': 26.5
+    }]
+    
+    model = create_opponent_model(df, contest_size=100000, games=games)
+    
+    # Test game stacks
+    opportunities = model.get_game_stack_opportunities(min_game_total=50.0)
+    print(f"\nFound {len(opportunities)} game stack opportunities")
+    
+    # Test bring-backs
+    bring_backs = model.get_bring_back_recommendations(['Mahomes', 'Hill', 'Kelce'])
+    print(f"\nTop bring-back recommendations: {len(bring_backs)}")
+    for bb in bring_backs[:3]:
+        print(f"  {bb['name']} ({bb['position']}): {bb['bring_back_score']:.2f}")
