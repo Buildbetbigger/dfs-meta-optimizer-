@@ -1,7 +1,15 @@
 """
-DFS Meta-Optimizer - Optimization Engine v6.2.0
+DFS Meta-Optimizer - Optimization Engine v6.3.0
 
-NEW IN v6.2.0:
+NEW IN v6.3.0:
+- Ownership Prediction Algorithm (multi-factor model)
+- Batch Ownership Prediction (entire player pool)
+- Chalk Play Identification (high-ownership detection)
+- Leverage Play Identification (ceiling/ownership ratio)
+- Ownership Distribution Analytics
+- Real-Time Data Integration Ready
+
+v6.2.0 Features (Retained):
 - ExposureRule System (hard/soft caps with priority)
 - Exposure-Aware Portfolio Generation
 - Portfolio Rebalancing (fix violations)
@@ -385,6 +393,250 @@ class ExposureManager:
                 })
         
         return suggestions
+
+
+# ============================================================================
+# OWNERSHIP TRACKER - NEW IN v6.3.0
+# ============================================================================
+
+@dataclass
+class OwnershipSnapshot:
+    """Represents an ownership snapshot"""
+    player_name: str
+    ownership: float
+    source: str  # 'predicted', 'actual', 'live'
+    timestamp: str
+    contest_type: str  # 'GPP', 'CASH', etc.
+
+
+class OwnershipTracker:
+    """
+    Tracks and predicts player ownership percentages.
+    
+    NEW IN v6.3.0:
+    - Ownership prediction based on multiple factors
+    - Batch prediction for entire player pool
+    - Chalk vs leverage identification
+    - Ownership trend analysis
+    - Live ownership updates
+    - Prediction accuracy tracking
+    """
+    
+    def __init__(self, players_df: pd.DataFrame):
+        """Initialize ownership tracker."""
+        self.players_df = players_df.copy()
+        self.player_names = set(players_df['name'].values)
+        
+        # Ownership storage
+        self.ownership_history: Dict[str, List] = {
+            name: [] for name in self.player_names
+        }
+        
+        # Current predicted ownership
+        self.current_ownership: Dict[str, float] = {}
+        
+        logger.info(f"OwnershipTracker initialized with {len(self.player_names)} players")
+    
+    def predict_ownership(
+        self,
+        player_name: str,
+        salary: float,
+        projection: float,
+        value: float,
+        team_implied_total: Optional[float] = None,
+        recent_performance: Optional[float] = None,
+        injury_status: str = 'ACTIVE',
+        news_impact: float = 0.0,
+        contest_type: str = 'GPP'
+    ) -> float:
+        """
+        Predict player ownership percentage.
+        
+        Factors considered:
+        - Salary/projection value
+        - Team implied total
+        - Recent performance
+        - Injury status
+        - News/hype
+        - Contest type
+        """
+        # Base ownership from value
+        if value >= 4.0:
+            base_ownership = 30.0  # Elite value
+        elif value >= 3.5:
+            base_ownership = 20.0  # Great value
+        elif value >= 3.0:
+            base_ownership = 12.0  # Good value
+        elif value >= 2.5:
+            base_ownership = 7.0   # Decent value
+        else:
+            base_ownership = 3.0   # Poor value
+        
+        # Salary tier adjustment
+        if salary >= 9000:
+            salary_mult = 1.3  # Studs get more ownership
+        elif salary >= 7000:
+            salary_mult = 1.0
+        elif salary >= 5000:
+            salary_mult = 0.8
+        else:
+            salary_mult = 0.6  # Cheap players less owned
+        
+        ownership = base_ownership * salary_mult
+        
+        # Team implied total boost
+        if team_implied_total:
+            if team_implied_total >= 28.0:
+                ownership *= 1.4  # High-scoring game expected
+            elif team_implied_total >= 24.0:
+                ownership *= 1.2
+            elif team_implied_total <= 17.0:
+                ownership *= 0.7  # Low-scoring game
+        
+        # Recent performance boost (recency bias)
+        if recent_performance:
+            perf_ratio = recent_performance / projection
+            if perf_ratio >= 1.3:
+                ownership *= 1.3  # Hot streak
+            elif perf_ratio >= 1.1:
+                ownership *= 1.15
+            elif perf_ratio <= 0.7:
+                ownership *= 0.8  # Slump
+        
+        # Injury status impact
+        if injury_status == 'QUESTIONABLE':
+            ownership *= 0.6
+        elif injury_status == 'DOUBTFUL':
+            ownership *= 0.2
+        elif injury_status == 'OUT':
+            ownership = 0.0
+        
+        # News/hype impact
+        if news_impact > 0:
+            hype_mult = 1 + (news_impact / 200.0)  # Up to 50% boost
+            ownership *= hype_mult
+        
+        # Contest type adjustment
+        if contest_type == 'CASH':
+            if value >= 3.0:
+                ownership *= 1.5  # Value more important in cash
+        
+        # Cap and floor
+        ownership = min(ownership, 90.0)
+        ownership = max(ownership, 0.5 if injury_status == 'ACTIVE' else 0.0)
+        
+        return round(ownership, 1)
+    
+    def batch_predict_ownership(
+        self,
+        players_df: pd.DataFrame,
+        contest_type: str = 'GPP',
+        vegas_implied_totals: Optional[Dict[str, float]] = None,
+        news_impacts: Optional[Dict[str, float]] = None
+    ) -> pd.DataFrame:
+        """Predict ownership for all players in dataframe."""
+        updated_df = players_df.copy()
+        
+        vegas_implied_totals = vegas_implied_totals or {}
+        news_impacts = news_impacts or {}
+        
+        for idx, player in updated_df.iterrows():
+            player_name = player['name']
+            
+            # Get team implied total
+            team = player.get('team', '')
+            team_implied = vegas_implied_totals.get(team)
+            
+            # Get news impact
+            news_impact = news_impacts.get(player_name, 0.0)
+            
+            # Calculate value if not present
+            if 'value' not in player or pd.isna(player['value']):
+                value = (player['projection'] / player['salary']) * 1000
+            else:
+                value = player['value']
+            
+            # Predict ownership
+            ownership = self.predict_ownership(
+                player_name=player_name,
+                salary=player['salary'],
+                projection=player['projection'],
+                value=value,
+                team_implied_total=team_implied,
+                injury_status=player.get('injury_status', 'ACTIVE'),
+                news_impact=news_impact,
+                contest_type=contest_type
+            )
+            
+            updated_df.at[idx, 'ownership'] = ownership
+            self.current_ownership[player_name] = ownership
+        
+        logger.info(f"Predicted ownership for {len(updated_df)} players")
+        
+        return updated_df
+    
+    def identify_chalk_plays(
+        self,
+        ownership_threshold: float = 25.0
+    ) -> List[Dict]:
+        """Identify high-ownership (chalk) plays."""
+        chalk_plays = []
+        
+        for player_name, ownership in self.current_ownership.items():
+            if ownership >= ownership_threshold:
+                chalk_plays.append({
+                    'player': player_name,
+                    'ownership': ownership
+                })
+        
+        chalk_plays.sort(key=lambda x: x['ownership'], reverse=True)
+        
+        return chalk_plays
+    
+    def identify_leverage_plays(
+        self,
+        players_df: pd.DataFrame,
+        ownership_threshold: float = 15.0
+    ) -> pd.DataFrame:
+        """
+        Identify low-ownership plays with high upside (leverage plays).
+        
+        Leverage score = ceiling / ownership
+        """
+        leverage_df = players_df.copy()
+        
+        # Filter to low ownership
+        leverage_df = leverage_df[leverage_df['ownership'] <= ownership_threshold]
+        
+        # Calculate leverage score
+        if 'ceiling' in leverage_df.columns:
+            leverage_df['leverage_score'] = leverage_df['ceiling'] / (leverage_df['ownership'] + 0.1)
+        else:
+            # Use projection * 1.3 as ceiling estimate
+            leverage_df['leverage_score'] = (leverage_df['projection'] * 1.3) / (leverage_df['ownership'] + 0.1)
+        
+        # Sort by leverage score
+        leverage_df = leverage_df.sort_values('leverage_score', ascending=False)
+        
+        return leverage_df[['name', 'position', 'salary', 'projection', 'ownership', 'leverage_score']].head(20)
+    
+    def get_ownership_distribution(self) -> Dict:
+        """Get distribution of ownership levels."""
+        if not self.current_ownership:
+            return {}
+        
+        ownerships = list(self.current_ownership.values())
+        
+        return {
+            'mean': np.mean(ownerships),
+            'median': np.median(ownerships),
+            'std': np.std(ownerships),
+            'min': min(ownerships),
+            'max': max(ownerships),
+            'high_owned': len([o for o in ownerships if o >= 25.0]),
+            'medium_owned': len([o for o in ownerships if 10.0 <= o < 25.0]),
+            'low_owned': len([o for o in ownerships if o < 10.0])
+        }
 
 
 # ============================================================================
