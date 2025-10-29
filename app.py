@@ -1,7 +1,14 @@
 """
-DFS Meta-Optimizer - Main Application v7.0.0
+DFS Meta-Optimizer - Main Application v7.0.1
 
-NEW IN v7.0.0 (GROUP 6 - MOST ADVANCED STATE):
+NEW IN v7.0.1:
+- Weather Data Integration (wind, temperature, precipitation)
+- Injury Status Tracker (OUT/DOUBTFUL/QUESTIONABLE)
+- Automated projection adjustments for weather/injuries
+- Manual weather/injury overrides
+- Comprehensive weather and injury reports
+
+v7.0.0 Features (Retained):
 - Advanced Analytics Dashboard (8D evaluation, variance, leverage)
 - Portfolio Performance Monitor (real-time tracking)
 - Contest Simulation Engine (Monte Carlo outcomes)
@@ -72,12 +79,16 @@ try:
         OWNERSHIP_CONFIG,
         get_contest_preset
     )
+    # NEW v7.0.1: Weather + Injury integration
+    from data_enrichment import DataEnrichment
+    from weather_data import WeatherDataProvider
+    from injury_tracker import InjuryTracker
 except ImportError as e:
     st.error(f"Import error: {e}")
     st.stop()
 
 st.set_page_config(
-    page_title="DFS Meta-Optimizer v7.0.0",
+    page_title="DFS Meta-Optimizer v7.0.1",
     page_icon="🎯",
     layout="wide"
 )
@@ -624,9 +635,15 @@ def main():
     # ============================================================================
     
     st.markdown("---")
-    st.header("📡 Real-Time Data Integration (v6.3.0)")
+    st.header("📡 Real-Time Data Integration (v7.0.1)")
     
-    tab1, tab2, tab3 = st.tabs(["📰 News Monitor", "🎲 Vegas Lines", "👥 Ownership Prediction"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📰 News Monitor", 
+        "🎲 Vegas Lines", 
+        "👥 Ownership Prediction",
+        "🌦️ Weather Data",  # NEW v7.0.1
+        "🏥 Injury Status"   # NEW v7.0.1
+    ])
     
     # Tab 1: News Monitor
     with tab1:
@@ -799,6 +816,175 @@ def main():
                 if not leverage_plays.empty:
                     st.markdown("#### 💎 Leverage Plays")
                     st.dataframe(leverage_plays, use_container_width=True)
+    
+    # Tab 4: Weather Data (NEW v7.0.1)
+    with tab4:
+        st.markdown("### 🌦️ Weather Impact Analysis")
+        
+        # Initialize weather provider
+        if 'weather_provider' not in st.session_state:
+            weather_api_key = st.text_input(
+                "OpenWeatherMap API Key (Optional)", 
+                type="password",
+                help="Get free key at openweathermap.org - 1000 calls/day"
+            )
+            st.session_state.weather_provider = WeatherDataProvider(weather_api_key if weather_api_key else None)
+        
+        weather_provider = st.session_state.weather_provider
+        
+        if st.button("🔄 Fetch Weather Data"):
+            with st.spinner("Fetching weather for all games..."):
+                # Add weather data to player pool
+                enriched_pool = weather_provider.add_weather_to_players(player_pool)
+                
+                # Update player pool
+                player_pool = enriched_pool
+                
+                st.success("✅ Weather data added!")
+                
+                # Show weather report
+                weather_report = weather_provider.get_weather_report(enriched_pool)
+                st.text(weather_report)
+                
+                # Show affected players
+                bad_weather = enriched_pool[
+                    (enriched_pool['weather_wind'] > 15) | 
+                    (enriched_pool['weather_temp'] < 32) |
+                    (enriched_pool['weather_conditions'].isin(['Rain', 'Snow', 'Thunderstorm']))
+                ]
+                
+                if not bad_weather.empty:
+                    st.markdown("#### ⚠️ Players Affected by Bad Weather")
+                    weather_df = bad_weather[[
+                        'name', 'position', 'team', 'weather_temp', 
+                        'weather_wind', 'weather_conditions', 'weather_impact'
+                    ]].copy()
+                    weather_df.columns = ['Player', 'Pos', 'Team', 'Temp (°F)', 'Wind (mph)', 'Conditions', 'Impact (%)']
+                    st.dataframe(weather_df, use_container_width=True)
+                else:
+                    st.info("✅ No bad weather detected - all games have good conditions")
+        
+        # Manual weather override
+        with st.expander("⚙️ Manual Weather Override"):
+            st.markdown("Override weather for specific games/teams")
+            
+            weather_team = st.selectbox("Team", player_pool['team'].unique().tolist(), key="weather_team")
+            weather_temp = st.number_input("Temperature (°F)", value=65, step=1)
+            weather_wind = st.number_input("Wind Speed (mph)", value=5, step=1)
+            weather_conditions = st.selectbox("Conditions", ['Clear', 'Cloudy', 'Rain', 'Snow', 'Thunderstorm'])
+            
+            if st.button("Apply Weather Override"):
+                # Apply manual weather
+                team_mask = player_pool['team'] == weather_team
+                player_pool.loc[team_mask, 'weather_temp'] = weather_temp
+                player_pool.loc[team_mask, 'weather_wind'] = weather_wind
+                player_pool.loc[team_mask, 'weather_conditions'] = weather_conditions
+                
+                # Recalculate impact
+                impact = weather_provider.get_weather_impact_score({
+                    'temperature': weather_temp,
+                    'wind_speed': weather_wind,
+                    'conditions': weather_conditions,
+                    'precipitation_prob': 0
+                })
+                
+                for pos in ['QB', 'RB', 'WR', 'TE', 'K']:
+                    pos_mask = team_mask & (player_pool['position'] == pos)
+                    if pos_mask.any():
+                        player_pool.loc[pos_mask, 'weather_impact'] = impact.get(pos, 100)
+                
+                st.success(f"✅ Applied weather override to {weather_team}")
+    
+    # Tab 5: Injury Status (NEW v7.0.1)
+    with tab5:
+        st.markdown("### 🏥 Injury Status Tracker")
+        
+        # Initialize injury tracker
+        if 'injury_tracker' not in st.session_state:
+            st.session_state.injury_tracker = InjuryTracker()
+        
+        injury_tracker = st.session_state.injury_tracker
+        
+        # Injury source selection
+        injury_source = st.selectbox(
+            "Injury Data Source",
+            ['fantasypros', 'espn', 'nfl'],
+            help="Select where to scrape injury reports from"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            auto_adjust = st.checkbox("Auto-Adjust Projections", value=True)
+        with col2:
+            filter_injured = st.checkbox("Filter OUT/DOUBTFUL", value=True)
+        
+        if st.button("🔄 Fetch Injury Report"):
+            with st.spinner(f"Scraping injury data from {injury_source}..."):
+                # Scrape injuries
+                injury_report = injury_tracker.scrape_injury_report(injury_source)
+                
+                if not injury_report.empty:
+                    # Add to player pool
+                    player_pool = injury_tracker.add_injury_status_to_players(
+                        player_pool, 
+                        injury_report
+                    )
+                    
+                    # Adjust projections if requested
+                    if auto_adjust:
+                        player_pool = injury_tracker.adjust_projections_for_injury(player_pool)
+                    
+                    # Filter if requested
+                    original_count = len(player_pool)
+                    if filter_injured:
+                        player_pool = injury_tracker.filter_healthy_players(player_pool)
+                        st.info(f"ℹ️ Filtered {original_count - len(player_pool)} injured players")
+                    
+                    st.success(f"✅ Injury data added from {injury_source}")
+                    
+                    # Show injury report
+                    injury_text = injury_tracker.get_injury_report(player_pool)
+                    st.text(injury_text)
+                    
+                    # Show injury details
+                    injured = player_pool[player_pool['injury_status'] != 'HEALTHY']
+                    if not injured.empty:
+                        st.markdown("#### 🚨 Injured Players")
+                        injury_df = injured[[
+                            'name', 'position', 'team', 'injury_status', 
+                            'injury_type', 'injury_impact', 'projection'
+                        ]].copy()
+                        injury_df.columns = ['Player', 'Pos', 'Team', 'Status', 'Injury', 'Impact', 'Proj']
+                        injury_df['Impact'] = injury_df['Impact'].apply(lambda x: f"{x:.0%}")
+                        st.dataframe(injury_df, use_container_width=True)
+                else:
+                    st.warning(f"⚠️ No injury data available from {injury_source}")
+        
+        # Manual injury entry
+        with st.expander("➕ Manual Injury Entry"):
+            st.markdown("Manually add or update injury status")
+            
+            injury_player = st.selectbox("Player", player_pool['name'].tolist(), key="injury_player")
+            injury_status = st.selectbox("Status", ['HEALTHY', 'QUESTIONABLE', 'DOUBTFUL', 'OUT'])
+            injury_type = st.text_input("Injury Type", "N/A")
+            
+            if st.button("Update Injury Status"):
+                player_mask = player_pool['name'] == injury_player
+                player_pool.loc[player_mask, 'injury_status'] = injury_status
+                player_pool.loc[player_mask, 'injury_type'] = injury_type
+                
+                # Set impact
+                impact_map = {'OUT': 0.0, 'DOUBTFUL': 0.3, 'QUESTIONABLE': 0.75, 'HEALTHY': 1.0}
+                player_pool.loc[player_mask, 'injury_impact'] = impact_map.get(injury_status, 1.0)
+                
+                # Adjust projection if not healthy
+                if injury_status != 'HEALTHY' and auto_adjust:
+                    original_proj = player_pool.loc[player_mask, 'projection'].values[0]
+                    new_proj = original_proj * impact_map.get(injury_status, 1.0)
+                    player_pool.loc[player_mask, 'projection'] = new_proj
+                    st.info(f"📉 Adjusted projection: {original_proj:.1f} → {new_proj:.1f}")
+                
+                st.success(f"✅ Updated {injury_player} status to {injury_status}")
     
     # AI Ownership Prediction (Legacy)
     if use_ai and 'api_key' in locals() and api_key:
