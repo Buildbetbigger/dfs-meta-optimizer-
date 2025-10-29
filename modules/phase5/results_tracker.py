@@ -1,6 +1,14 @@
 """
-Module 5: Results Tracker
-Simple tracker for logging and analyzing contest results
+DFS Meta-Optimizer v7.0.0 - Results Tracker Module
+Historical performance tracking and analysis
+
+Features:
+- Contest result logging
+- Performance trend analysis
+- Strategy effectiveness comparison
+- Ownership accuracy tracking
+- Weekly/seasonal statistics
+- CSV import/export
 """
 
 import pandas as pd
@@ -15,20 +23,20 @@ logger = logging.getLogger(__name__)
 
 class ResultsTracker:
     """
-    Tracks contest results over time.
+    Tracks contest results over time for self-improvement.
     
-    Features:
-    - Manual contest logging
-    - Performance trend analysis
-    - Ownership accuracy tracking
-    - Strategy effectiveness analysis
-    - Week-over-week comparison
+    NEW v7.0.0 Features:
+    - Historical performance database
+    - Trend analysis
+    - Strategy comparison
+    - Ownership accuracy metrics
+    - Learning from past results
     """
     
     def __init__(self):
         """Initialize results tracker"""
         self.contests: List[Dict] = []
-        logger.info("ResultsTracker initialized")
+        logger.info("ResultsTracker v7.0.0 initialized")
     
     def log_contest(
         self,
@@ -45,7 +53,7 @@ class ResultsTracker:
         notes: str = ""
     ):
         """
-        Log a contest result manually.
+        Log a contest result.
         
         Args:
             week: Week number
@@ -127,6 +135,8 @@ class ResultsTracker:
         """
         Get weekly performance trends.
         
+        NEW v7.0.0: Track improvement over time!
+        
         Args:
             last_n_weeks: Show only last N weeks (None = all)
         
@@ -162,6 +172,8 @@ class ResultsTracker:
     ) -> Dict:
         """
         Analyze ownership prediction accuracy.
+        
+        NEW v7.0.0: Learn from ownership predictions!
         
         Compares predicted vs actual ownership from logged contests.
         
@@ -201,26 +213,11 @@ class ResultsTracker:
             'num_predictions': len(errors)
         }
     
-    def identify_best_stacks(self, min_occurrences: int = 3) -> List[Dict]:
-        """
-        Identify which player stacks performed best.
-        
-        Args:
-            min_occurrences: Minimum times stack must appear
-        
-        Returns:
-            List of stack performance data
-        """
-        # This would require lineup data - simplified version
-        # In real implementation, would track which players appeared together
-        
-        logger.info("Stack analysis requires lineup data from contests")
-        
-        return []
-    
     def compare_strategies(self) -> pd.DataFrame:
         """
         Compare performance by contest type.
+        
+        NEW v7.0.0: Which strategy works best?
         
         Returns:
             DataFrame with strategy comparison
@@ -371,3 +368,52 @@ class ResultsTracker:
             self.contests.append(contest_record)
         
         logger.info(f"Imported {len(df)} contests from {filepath}")
+    
+    def get_learning_insights(self) -> Dict:
+        """
+        Generate insights for self-improvement.
+        
+        NEW v7.0.0: System learns from past performance!
+        
+        Returns:
+            Dictionary with actionable insights
+        """
+        if len(self.contests) < 5:
+            return {'insight': 'Need more contest data to generate insights'}
+        
+        stats = self.get_summary_stats()
+        trends = self.get_trends()
+        strategy_comp = self.compare_strategies()
+        
+        insights = []
+        
+        # ROI trend
+        if not trends.empty and len(trends) >= 3:
+            recent_roi = trends.tail(3)['roi'].mean()
+            overall_roi = stats['overall_roi']
+            
+            if recent_roi > overall_roi + 5:
+                insights.append("✅ Performance improving! Recent ROI exceeds historical average")
+            elif recent_roi < overall_roi - 5:
+                insights.append("⚠️ Performance declining. Recent ROI below historical average")
+        
+        # Strategy effectiveness
+        if not strategy_comp.empty:
+            best_strategy = strategy_comp.nlargest(1, 'roi').iloc[0]
+            insights.append(
+                f"💡 Best performing strategy: {best_strategy['contest_type']} "
+                f"({best_strategy['roi']:.1f}% ROI)"
+            )
+        
+        # Win rate
+        if stats['win_rate'] < 30:
+            insights.append("📊 Win rate below 30% - consider more conservative plays")
+        elif stats['win_rate'] > 60:
+            insights.append("🎯 High win rate! Portfolio well-calibrated")
+        
+        return {
+            'insights': insights,
+            'overall_roi': stats['overall_roi'],
+            'total_profit': stats['total_profit'],
+            'best_strategy': best_strategy['contest_type'] if not strategy_comp.empty else 'Unknown'
+        }
