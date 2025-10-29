@@ -1,13 +1,22 @@
 """
-DFS Meta-Optimizer - Main Application v6.1.0
+DFS Meta-Optimizer - Main Application v6.2.0
 
-NEW IN v6.1.0 UI:
-- Contest Preset Dropdown (8 pre-configured strategies)
+NEW IN v6.2.0 UI:
+- Exposure Rule Builder (hard/soft caps)
+- Exposure Report Dashboard with compliance indicators
+- Tiered Portfolio Generation (safe/balanced/contrarian)
+- Portfolio Filtering Options
+- Similarity Matrix Visualization
+- Find Most Unique Lineups
+- Underexposed Player Detection
+- Rebalance Portfolio Button
+
+v6.1.0 Features (Retained):
+- Contest Preset Dropdown
 - Correlation Matrix Visualization
 - Stacking Report Dashboard
-- Bring-Back Recommendations Display
-- Game Stack Opportunity Table
-- Enhanced Lineup Cards with Stack Details
+- Bring-Back Recommendations
+- Game Stack Opportunities
 
 Web Interface built with Streamlit.
 """
@@ -19,17 +28,17 @@ from typing import Dict, List, Optional
 import sys
 from pathlib import Path
 
-# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import core modules
 try:
-    from optimization_engine import (
-        optimize_lineups, 
+    from optimization_engine_v6 import (
+        optimize_lineups,
         CONTEST_PRESETS,
         CorrelationMatrix,
         StackAnalyzer,
-        StackingReport
+        StackingReport,
+        LineupFilter,
+        ExposureManager
     )
     from opponent_modeling import create_opponent_model, GameInfo
     from claude_assistant import ClaudeAssistant
@@ -38,20 +47,292 @@ except ImportError as e:
     st.error(f"Import error: {e}")
     st.stop()
 
-# Page configuration
 st.set_page_config(
-    page_title="DFS Meta-Optimizer v6.1.0",
+    page_title="DFS Meta-Optimizer v6.2.0",
     page_icon="🎯",
     layout="wide"
 )
 
 
 # ============================================================================
-# CONTEST PRESET UI - NEW IN v6.1.0
+# EXPOSURE RULE BUILDER UI - NEW IN v6.2.0
+# ============================================================================
+
+def render_exposure_rule_builder() -> List[Dict]:
+    """Render exposure rule builder interface."""
+    st.markdown("### 🎚️ Exposure Rules")
+    
+    with st.expander("➕ Add Exposure Rule", expanded=False):
+        rule_type_option = st.selectbox(
+            "Rule Type",
+            options=['Player-Specific', 'Position-Based', 'Team-Based'],
+            help="Choose what type of exposure rule to create"
+        )
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if rule_type_option == 'Player-Specific':
+                rule_target = st.text_input("Player Name", placeholder="Patrick Mahomes")
+                rule_key = 'player_name'
+            elif rule_type_option == 'Position-Based':
+                rule_target = st.selectbox("Position", options=['QB', 'RB', 'WR', 'TE', 'DST'])
+                rule_key = 'position'
+            else:  # Team-Based
+                rule_target = st.text_input("Team", placeholder="KC")
+                rule_key = 'team'
+        
+        with col2:
+            min_exp = st.number_input("Min Exposure %", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
+            max_exp = st.number_input("Max Exposure %", min_value=0.0, max_value=100.0, value=40.0, step=5.0)
+        
+        with col3:
+            rule_enforcement = st.selectbox(
+                "Enforcement",
+                options=['Hard (Must Enforce)', 'Soft (Prefer)'],
+                help="Hard caps are strictly enforced, soft caps are preferences"
+            )
+            priority = st.number_input("Priority", min_value=1, max_value=10, value=5, 
+                                      help="Higher priority rules are enforced first")
+        
+        if st.button("Add Rule", type="primary"):
+            if rule_target:
+                rule = {
+                    rule_key: rule_target,
+                    'min_exposure': min_exp,
+                    'max_exposure': max_exp,
+                    'rule_type': 'hard' if 'Hard' in rule_enforcement else 'soft',
+                    'priority': priority
+                }
+                
+                if 'exposure_rules' not in st.session_state:
+                    st.session_state.exposure_rules = []
+                
+                st.session_state.exposure_rules.append(rule)
+                st.success(f"✅ Added {rule_enforcement.split()[0].lower()} rule for {rule_target}")
+                st.rerun()
+    
+    # Display current rules
+    if 'exposure_rules' in st.session_state and st.session_state.exposure_rules:
+        st.markdown("**Current Rules:**")
+        
+        rules_df = pd.DataFrame([
+            {
+                'Target': rule.get('player_name') or rule.get('position') or rule.get('team'),
+                'Type': 'Player' if 'player_name' in rule else ('Position' if 'position' in rule else 'Team'),
+                'Min %': rule['min_exposure'],
+                'Max %': rule['max_exposure'],
+                'Enforcement': rule['rule_type'].title(),
+                'Priority': rule['priority']
+            }
+            for rule in st.session_state.exposure_rules
+        ])
+        
+        st.dataframe(rules_df, use_container_width=True, hide_index=True)
+        
+        if st.button("Clear All Rules"):
+            st.session_state.exposure_rules = []
+            st.rerun()
+        
+        return st.session_state.exposure_rules
+    
+    return []
+
+
+# ============================================================================
+# EXPOSURE REPORT DASHBOARD - NEW IN v6.2.0
+# ============================================================================
+
+def render_exposure_report(exposure_report: Dict):
+    """Render comprehensive exposure report dashboard."""
+    st.markdown("### 📊 Exposure Analysis")
+    
+    compliance = exposure_report['compliance']
+    
+    # Compliance status
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if compliance['compliant']:
+            st.success("✅ **Exposure Compliant**")
+        else:
+            st.error(f"❌ **{compliance['total_violations']} Violations**")
+    
+    with col2:
+        st.metric("Violations", compliance['total_violations'])
+    
+    with col3:
+        st.metric("Warnings", compliance['total_warnings'])
+    
+    # Exposure table
+    exposure_table = exposure_report['exposure_table']
+    
+    if not exposure_table.empty:
+        st.markdown("#### Top Player Exposures")
+        
+        # Style the dataframe
+        def color_compliance(val):
+            if val == '✓':
+                return 'background-color: #90EE90'
+            elif val == '✗':
+                return 'background-color: #FFB6C1'
+            return ''
+        
+        styled_df = exposure_table.style.applymap(
+            color_compliance,
+            subset=['Compliant']
+        )
+        
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    
+    # Violations detail
+    if compliance['violations']:
+        st.markdown("#### ⚠️ Exposure Violations")
+        
+        for violation in compliance['violations'][:5]:  # Top 5
+            st.warning(
+                f"**{violation['player']}**: {violation['current_exposure']:.1f}% "
+                f"(max: {violation.get('max_allowed', 'N/A')}%)"
+            )
+    
+    # Suggestions
+    suggestions = exposure_report.get('suggestions', [])
+    
+    if suggestions:
+        st.markdown("#### 💡 Recommended Actions")
+        
+        for suggestion in suggestions[:3]:  # Top 3
+            st.info(f"🔧 {suggestion['action']}")
+    
+    # Underexposed players
+    underexposed = exposure_report.get('underexposed', [])
+    
+    if underexposed and len(underexposed) > 0:
+        with st.expander(f"📉 Underexposed Players ({len(underexposed)})"):
+            st.write(", ".join(underexposed[:20]))
+
+
+# ============================================================================
+# TIERED PORTFOLIO UI - NEW IN v6.2.0
+# ============================================================================
+
+def render_tiered_portfolio_option() -> Optional[Dict[str, float]]:
+    """Render tiered portfolio configuration."""
+    st.markdown("### 🎯 Portfolio Strategy")
+    
+    use_tiered = st.checkbox(
+        "Use Tiered Portfolio",
+        value=False,
+        help="Split lineups into safe/balanced/contrarian tiers"
+    )
+    
+    if use_tiered:
+        st.markdown("**Configure Tier Distribution:**")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            safe_pct = st.slider(
+                "Safe %",
+                min_value=0,
+                max_value=100,
+                value=30,
+                step=5,
+                help="High floor, low variance lineups"
+            )
+        
+        with col2:
+            balanced_pct = st.slider(
+                "Balanced %",
+                min_value=0,
+                max_value=100,
+                value=50,
+                step=5,
+                help="Standard optimization"
+            )
+        
+        with col3:
+            contrarian_pct = st.slider(
+                "Contrarian %",
+                min_value=0,
+                max_value=100,
+                value=20,
+                step=5,
+                help="Low ownership, high leverage"
+            )
+        
+        total = safe_pct + balanced_pct + contrarian_pct
+        
+        if total != 100:
+            st.warning(f"⚠️ Total must equal 100% (currently {total}%)")
+            return None
+        
+        return {
+            'safe': safe_pct / 100,
+            'balanced': balanced_pct / 100,
+            'contrarian': contrarian_pct / 100
+        }
+    
+    return None
+
+
+# ============================================================================
+# FILTERING OPTIONS UI - NEW IN v6.2.0
+# ============================================================================
+
+def render_filtering_options() -> Dict:
+    """Render portfolio filtering options."""
+    st.markdown("### 🔧 Filtering Options")
+    
+    with st.expander("Configure Filters", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            remove_duplicates = st.checkbox("Remove Duplicates", value=True)
+            
+            apply_similarity = st.checkbox("Apply Similarity Filter", value=True)
+            if apply_similarity:
+                min_unique = st.slider(
+                    "Min Unique Players",
+                    min_value=1,
+                    max_value=9,
+                    value=4,
+                    help="Minimum different players between lineups"
+                )
+            else:
+                min_unique = 0
+        
+        with col2:
+            apply_diversify = st.checkbox("Smart Diversification", value=False)
+            if apply_diversify:
+                diversity_weight = st.slider(
+                    "Diversity Weight",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.6,
+                    step=0.1
+                )
+                quality_weight = 1.0 - diversity_weight
+            else:
+                diversity_weight = 0.6
+                quality_weight = 0.4
+    
+    return {
+        'remove_duplicates': remove_duplicates,
+        'apply_similarity': apply_similarity,
+        'min_unique_players': min_unique,
+        'apply_diversify': apply_diversify,
+        'diversity_weight': diversity_weight,
+        'quality_weight': quality_weight
+    }
+
+
+# ============================================================================
+# PRESET SELECTOR - From v6.1.0
 # ============================================================================
 
 def render_preset_selector() -> Optional[str]:
-    """Render contest preset dropdown and display configuration."""
+    """Render contest preset dropdown."""
     st.markdown("### 🎯 Contest Type")
     
     preset_options = ['Custom'] + list(CONTEST_PRESETS.keys())
@@ -71,27 +352,24 @@ def render_preset_selector() -> Optional[str]:
         "Select Contest Strategy",
         options=preset_options,
         format_func=lambda x: preset_labels.get(x, x),
-        help="Pre-configured optimization strategies for different contest types"
+        help="Pre-configured optimization strategies"
     )
     
     if selected != 'Custom':
         preset = CONTEST_PRESETS[selected]
         
-        # Display preset configuration
         with st.expander("📋 Preset Configuration", expanded=False):
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown(f"**Strategy:** {preset.description}")
                 st.markdown(f"**Lineups:** {preset.num_lineups}")
-                st.markdown(f"**Stack Range:** {preset.stack_min}-{preset.stack_max} players")
-                st.markdown(f"**Genetic Algorithm:** {'✓' if preset.use_genetic else '✗'}")
+                st.markdown(f"**Max Exposure:** {preset.max_exposure}%")
             
             with col2:
                 st.markdown("**Weight Distribution:**")
                 st.progress(preset.ownership_weight, text=f"Ownership: {preset.ownership_weight:.1%}")
                 st.progress(preset.leverage_weight, text=f"Leverage: {preset.leverage_weight:.1%}")
-                st.progress(preset.ceiling_weight, text=f"Ceiling: {preset.ceiling_weight:.1%}")
                 st.progress(preset.correlation_weight, text=f"Correlation: {preset.correlation_weight:.1%}")
         
         return selected
@@ -100,268 +378,54 @@ def render_preset_selector() -> Optional[str]:
 
 
 # ============================================================================
-# CORRELATION MATRIX UI - NEW IN v6.1.0
+# SIMILARITY MATRIX - NEW IN v6.2.0
 # ============================================================================
 
-def render_correlation_matrix(lineup: Dict):
-    """Render correlation matrix for a lineup."""
-    players = lineup.get('players', [])
+def render_similarity_matrix(lineups: List[Dict]):
+    """Render lineup similarity matrix."""
+    st.markdown("### 🔗 Lineup Similarity Matrix")
     
-    if len(players) < 2:
-        return
-    
-    # Get correlation matrix
-    matrix = CorrelationMatrix.get_full_matrix(players)
-    
-    # Create DataFrame for display
-    player_names = [p['name'] for p in players]
-    df = pd.DataFrame(matrix, columns=player_names, index=player_names)
+    lineup_filter = LineupFilter(pd.DataFrame())
+    similarity_df = lineup_filter.get_lineup_similarity_matrix(lineups)
     
     # Color coding
-    st.markdown("#### 🔗 Lineup Correlation Matrix")
-    
-    def color_correlation(val):
-        """Color code correlation values."""
-        if val > 0.4:
-            return 'background-color: #90EE90'  # Light green (positive)
-        elif val > 0.2:
-            return 'background-color: #FFFFE0'  # Light yellow (weak positive)
-        elif val < -0.2:
-            return 'background-color: #FFB6C1'  # Light red (negative)
+    def color_similarity(val):
+        if val == 100.0:
+            return 'background-color: #FFFFFF'
+        elif val > 75:
+            return 'background-color: #FFB6C1'  # High similarity (bad)
+        elif val > 50:
+            return 'background-color: #FFFFE0'  # Medium
         else:
-            return ''
+            return 'background-color: #90EE90'  # Low similarity (good)
     
-    styled_df = df.style.applymap(color_correlation).format("{:.2f}")
+    styled_df = similarity_df.style.applymap(color_similarity).format("{:.0f}")
+    
     st.dataframe(styled_df, use_container_width=True)
-    
-    st.caption("🟩 Strong Positive (>0.4)  🟨 Weak Positive (0.2-0.4)  🟥 Negative (<-0.2)")
+    st.caption("🟥 High Similarity (>75%)  🟨 Medium (50-75%)  🟩 Low (<50%)")
 
 
 # ============================================================================
-# STACKING REPORT UI - NEW IN v6.1.0
-# ============================================================================
-
-def render_stacking_report(report: Dict):
-    """Render comprehensive stacking report."""
-    if not report or report.get('total_stacks', 0) == 0:
-        st.info("No stacks identified in generated lineups")
-        return
-    
-    st.markdown("### 📊 Stacking Analysis Report")
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Total Stacks",
-            report['total_stacks'],
-            help="Number of stacks across all lineups"
-        )
-    
-    with col2:
-        st.metric(
-            "Stack Types",
-            report['unique_stack_types'],
-            help="Different stack configurations used"
-        )
-    
-    with col3:
-        st.metric(
-            "Bring-Back %",
-            f"{report['bring_back_percentage']:.1f}%",
-            help="Percentage of stacks with bring-back plays"
-        )
-    
-    with col4:
-        st.metric(
-            "Avg Correlation",
-            f"{report['avg_correlation_score']:.1f}",
-            help="Average correlation score (0-100 scale)"
-        )
-    
-    # Stack type breakdown
-    st.markdown("#### Stack Type Distribution")
-    breakdown_df = pd.DataFrame([
-        {'Stack Type': k, 'Count': v}
-        for k, v in report['stack_type_breakdown'].items()
-    ])
-    st.bar_chart(breakdown_df.set_index('Stack Type'))
-    
-    # Top stacks
-    if 'top_stacks' in report and report['top_stacks']:
-        st.markdown("#### 🏆 Top 5 Stacks by Correlation")
-        
-        for i, stack in enumerate(report['top_stacks'][:5], 1):
-            with st.expander(f"#{i}: {stack.stack_type} - {stack.team} ({stack.correlation_score:.1f})"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**Stack Players:**")
-                    for player, pos in zip(stack.players, stack.positions):
-                        st.text(f"  • {player} ({pos})")
-                
-                with col2:
-                    st.markdown("**Stack Metrics:**")
-                    st.text(f"Correlation Score: {stack.correlation_score:.1f}/100")
-                    st.text(f"Total Salary: ${stack.stack_salary:,}")
-                    st.text(f"Avg Ownership: {stack.stack_ownership:.1f}%")
-                    st.text(f"Bring-Back: {'✓' if stack.has_bring_back else '✗'}")
-                    
-                    if stack.bring_back_players:
-                        st.markdown("**Bring-Back Players:**")
-                        for player in stack.bring_back_players:
-                            st.text(f"  • {player}")
-    
-    # Recommendations
-    if 'recommendations' in report and report['recommendations']:
-        st.markdown("#### 💡 Recommendations")
-        for rec in report['recommendations']:
-            st.info(rec)
-
-
-# ============================================================================
-# GAME STACK OPPORTUNITIES UI - NEW IN v6.1.0
-# ============================================================================
-
-def render_game_stack_opportunities(opportunities: List):
-    """Render game stacking opportunities table."""
-    if not opportunities:
-        st.info("No high-scoring game stack opportunities found")
-        return
-    
-    st.markdown("### 🎮 Game Stack Opportunities")
-    st.caption("High-correlation multi-team stacks for shootout games")
-    
-    # Build DataFrame
-    data = []
-    for opp in opportunities[:10]:  # Top 10
-        data.append({
-            'Game': opp.game_id,
-            'Total': opp.game_total,
-            'Primary QB': opp.primary_qb or 'N/A',
-            'Primary WRs': ', '.join(opp.primary_receivers[:2]),
-            'Bring-Back Team': opp.bring_back_team,
-            'Top Bring-Back': opp.bring_back_candidates[0]['name'] if opp.bring_back_candidates else 'N/A',
-            'Correlation': f"{opp.correlation_score:.2f}",
-            'Leverage': f"{opp.leverage_score:.2f}",
-            'Own Discount': f"{opp.ownership_discount:.1%}"
-        })
-    
-    df = pd.DataFrame(data)
-    
-    # Style the dataframe
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # Detailed view
-    selected_game = st.selectbox(
-        "View Detailed Stack",
-        options=range(len(opportunities[:10])),
-        format_func=lambda x: opportunities[x].game_id
-    )
-    
-    if selected_game is not None:
-        opp = opportunities[selected_game]
-        
-        with st.expander("📋 Full Stack Details", expanded=True):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**Primary Stack (Offense):**")
-                st.text(f"QB: {opp.primary_qb}")
-                for receiver in opp.primary_receivers:
-                    st.text(f"WR: {receiver}")
-            
-            with col2:
-                st.markdown("**Bring-Back Candidates:**")
-                for candidate in opp.bring_back_candidates[:5]:
-                    st.text(
-                        f"{candidate['name']} ({candidate['position']}) - "
-                        f"${candidate['salary']:,} | {candidate['ownership']:.1f}% own"
-                    )
-
-
-# ============================================================================
-# BRING-BACK RECOMMENDATIONS UI - NEW IN v6.1.0
-# ============================================================================
-
-def render_bring_back_recommendations(bring_backs: List[Dict]):
-    """Render bring-back recommendations."""
-    if not bring_backs:
-        st.info("No bring-back recommendations available")
-        return
-    
-    st.markdown("### 🔄 Bring-Back Recommendations")
-    st.caption("Opposing players that correlate with your primary stack")
-    
-    # Build DataFrame
-    df = pd.DataFrame(bring_backs)
-    
-    # Format columns
-    display_df = df[[
-        'name', 'position', 'team', 'salary', 
-        'projection', 'ownership', 'correlation', 'bring_back_score'
-    ]].copy()
-    
-    display_df.columns = [
-        'Player', 'Pos', 'Team', 'Salary', 
-        'Proj', 'Own%', 'Corr', 'Score'
-    ]
-    
-    display_df['Salary'] = display_df['Salary'].apply(lambda x: f"${x:,}")
-    display_df['Proj'] = display_df['Proj'].round(1)
-    display_df['Own%'] = display_df['Own%'].round(1)
-    display_df['Corr'] = display_df['Corr'].round(2)
-    display_df['Score'] = display_df['Score'].round(2)
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-
-# ============================================================================
-# ENHANCED LINEUP DISPLAY - v6.1.0
+# ENHANCED LINEUP DISPLAY - From v6.1.0
 # ============================================================================
 
 def render_enhanced_lineup(lineup: Dict, index: int):
-    """Render lineup with v6.1.0 enhancements."""
+    """Render lineup with v6.1.0+ enhancements."""
     with st.container():
-        # Header with key metrics
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric(
-                "Projection",
-                f"{lineup.get('projection', 0):.1f}",
-                help="Expected fantasy points"
-            )
+            st.metric("Projection", f"{lineup.get('projection', 0):.1f}")
         
         with col2:
-            st.metric(
-                "Salary",
-                f"${lineup.get('salary', 0):,}",
-                help="Total salary used"
-            )
+            st.metric("Salary", f"${lineup.get('salary', 0):,}")
         
         with col3:
-            st.metric(
-                "Ownership",
-                f"{lineup.get('ownership', 0):.1f}%",
-                help="Average projected ownership"
-            )
+            st.metric("Ownership", f"{lineup.get('ownership', 0):.1f}%")
         
         with col4:
-            # NEW v6.1.0 - Correlation score
-            corr_score = lineup.get('correlation_score', 0)
-            st.metric(
-                "Correlation",
-                f"{corr_score:.1f}",
-                help="Stack correlation score (0-100)"
-            )
+            st.metric("Correlation", f"{lineup.get('correlation_score', 0):.1f}")
         
-        # Players table
         players = lineup.get('players', [])
         if players:
             players_df = pd.DataFrame(players)
@@ -376,7 +440,6 @@ def render_enhanced_lineup(lineup: Dict, index: int):
             
             st.dataframe(display_df, use_container_width=True, hide_index=True)
         
-        # NEW v6.1.0 - Stack information
         stacks = lineup.get('stacks', [])
         if stacks:
             st.markdown("**🔗 Identified Stacks:**")
@@ -389,10 +452,40 @@ def render_enhanced_lineup(lineup: Dict, index: int):
                     stack_info += f" | Bring-Back: {', '.join(stack.bring_back_players)}"
                 
                 st.text(stack_info)
-        
-        # Correlation matrix toggle
-        if st.checkbox(f"Show Correlation Matrix (Lineup #{index+1})", key=f"corr_matrix_{index}"):
-            render_correlation_matrix(lineup)
+
+
+# ============================================================================
+# STACKING REPORT - From v6.1.0
+# ============================================================================
+
+def render_stacking_report(report: Dict):
+    """Render comprehensive stacking report."""
+    if not report or report.get('total_stacks', 0) == 0:
+        st.info("No stacks identified")
+        return
+    
+    st.markdown("### 📊 Stacking Analysis")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Stacks", report['total_stacks'])
+    
+    with col2:
+        st.metric("Stack Types", report['unique_stack_types'])
+    
+    with col3:
+        st.metric("Bring-Back %", f"{report['bring_back_percentage']:.1f}%")
+    
+    with col4:
+        st.metric("Avg Correlation", f"{report['avg_correlation_score']:.1f}")
+    
+    st.markdown("#### Stack Type Distribution")
+    breakdown_df = pd.DataFrame([
+        {'Stack Type': k, 'Count': v}
+        for k, v in report['stack_type_breakdown'].items()
+    ])
+    st.bar_chart(breakdown_df.set_index('Stack Type'))
 
 
 # ============================================================================
@@ -402,9 +495,8 @@ def render_enhanced_lineup(lineup: Dict, index: int):
 def main():
     """Main application entry point."""
     
-    # Header
-    st.title("🎯 DFS Meta-Optimizer v6.1.0")
-    st.markdown("**Advanced NFL DFS Lineup Optimization with Contest Presets & Stacking Intelligence**")
+    st.title("🎯 DFS Meta-Optimizer v6.2.0")
+    st.markdown("**Advanced NFL DFS Portfolio Optimization with Exposure Management**")
     st.markdown("---")
     
     # Sidebar - Configuration
@@ -419,10 +511,10 @@ def main():
             help="CSV with columns: name, position, salary, team, projection, ownership"
         )
         
-        # Contest preset selector (v6.1.0)
+        # Contest preset
         preset_name = render_preset_selector()
         
-        # Custom configuration (if not using preset)
+        # Custom settings if not using preset
         if not preset_name:
             st.subheader("🎛️ Custom Settings")
             
@@ -433,71 +525,39 @@ def main():
                 value=20
             )
             
-            contest_size = st.number_input(
-                "Contest Size",
-                min_value=2,
-                max_value=500000,
-                value=10000
-            )
-            
-            optimization_method = st.selectbox(
-                "Optimization Method",
-                options=['genetic', 'greedy', 'monte_carlo']
+            global_max_exposure = st.slider(
+                "Global Max Exposure %",
+                min_value=10.0,
+                max_value=100.0,
+                value=40.0,
+                step=5.0,
+                help="Maximum exposure for any player"
             )
         else:
             preset = CONTEST_PRESETS[preset_name]
             num_lineups = preset.num_lineups
-            contest_size = st.number_input(
-                "Contest Size",
-                min_value=2,
-                max_value=500000,
-                value=10000
-            )
-            optimization_method = 'genetic' if preset.use_genetic else 'greedy'
+            global_max_exposure = preset.max_exposure
         
-        # AI Assistant toggle
+        # v6.2.0: Exposure rules
+        exposure_rules = render_exposure_rule_builder()
+        
+        # v6.2.0: Tiered portfolio
+        tier_distribution = render_tiered_portfolio_option()
+        
+        # v6.2.0: Filtering options
+        filter_options = render_filtering_options()
+        
+        # AI Assistant
         st.subheader("🤖 AI Assistant")
-        use_ai = st.checkbox(
-            "Enable AI Ownership Prediction",
-            value=False,
-            help="Use Claude AI to predict ownership from social media analysis"
-        )
+        use_ai = st.checkbox("Enable AI Ownership Prediction", value=False)
         
         if use_ai:
-            api_key = st.text_input(
-                "Anthropic API Key",
-                type="password",
-                help="Your Claude API key for AI predictions"
-            )
-        
-        # Advanced options
-        with st.expander("🔧 Advanced Options"):
-            diversity_threshold = st.slider(
-                "Diversity Threshold",
-                min_value=0.0,
-                max_value=9.0,
-                value=4.0,
-                step=0.5,
-                help="Minimum player differences between lineups"
-            )
-            
-            enable_stacking_report = st.checkbox(
-                "Generate Stacking Report",
-                value=True,
-                help="Comprehensive stack analysis"
-            )
-            
-            show_game_stacks = st.checkbox(
-                "Show Game Stack Opportunities",
-                value=True,
-                help="Multi-team stacking recommendations"
-            )
+            api_key = st.text_input("Anthropic API Key", type="password")
     
-    # Main content area
+    # Main content
     if not uploaded_file:
         st.info("👈 Upload a player pool CSV to begin optimization")
         
-        # Show example
         with st.expander("📋 Example CSV Format"):
             example_df = pd.DataFrame({
                 'name': ['Patrick Mahomes', 'Tyreek Hill', 'Travis Kelce'],
@@ -519,7 +579,7 @@ def main():
         st.error(f"Error loading CSV: {e}")
         return
     
-    # Validate required columns
+    # Validate columns
     required_cols = ['name', 'position', 'salary', 'team']
     missing_cols = [col for col in required_cols if col not in player_pool.columns]
     
@@ -527,37 +587,21 @@ def main():
         st.error(f"Missing required columns: {', '.join(missing_cols)}")
         return
     
-    # Show player pool preview
     with st.expander("👀 Player Pool Preview"):
         st.dataframe(player_pool.head(10), use_container_width=True)
     
-    # AI Ownership Prediction (if enabled)
+    # AI Ownership Prediction
     if use_ai and 'api_key' in locals() and api_key:
         with st.spinner("🤖 AI analyzing ownership trends..."):
             try:
                 assistant = ClaudeAssistant(api_key)
-                
-                # Get AI predictions
                 predictions = assistant.predict_ownership(player_pool)
                 
                 if predictions:
                     player_pool['ownership'] = player_pool['name'].map(predictions)
                     st.success("✅ AI ownership predictions applied")
-                    
-                    # Show AI insights
-                    with st.expander("🧠 AI Insights"):
-                        top_chalk = sorted(
-                            predictions.items(),
-                            key=lambda x: x[1],
-                            reverse=True
-                        )[:5]
-                        
-                        st.markdown("**Top Chalk Plays:**")
-                        for name, own in top_chalk:
-                            st.text(f"  • {name}: {own:.1f}%")
-                        
             except Exception as e:
-                st.warning(f"AI prediction failed: {e}. Using default ownership.")
+                st.warning(f"AI prediction failed: {e}")
     
     # Optimization button
     st.markdown("---")
@@ -566,29 +610,59 @@ def main():
         
         with st.spinner(f"Optimizing {num_lineups} lineups..."):
             
-            # Build config
             config = {
                 'salary_cap': 50000,
-                'optimization_method': optimization_method,
-                'diversity_threshold': diversity_threshold
+                'optimization_method': 'genetic' if not preset_name or CONTEST_PRESETS.get(preset_name, ContestPreset('','',0,0,0,0,0,0,0,0,False,False)).use_genetic else 'greedy'
             }
             
             try:
-                # Run optimization
-                lineups, stacking_report = optimize_lineups(
+                # Build exposure rules
+                exposure_rules_list = exposure_rules if exposure_rules else []
+                
+                # Add global max as rule
+                if not preset_name:
+                    exposure_rules_list.append({
+                        'max_exposure': global_max_exposure,
+                        'rule_type': 'hard',
+                        'priority': 1
+                    })
+                
+                # Generate lineups
+                lineups, stacking_report, exposure_report = optimize_lineups(
                     player_pool,
                     num_lineups=num_lineups,
                     contest_preset=preset_name,
-                    custom_config=config if not preset_name else None
+                    custom_config=config if not preset_name else None,
+                    exposure_rules=exposure_rules_list
                 )
                 
                 if not lineups:
-                    st.error("No valid lineups generated. Try adjusting settings.")
+                    st.error("No valid lineups generated")
                     return
                 
                 st.success(f"✅ Generated {len(lineups)} optimal lineups!")
                 
-                # Display results
+                # Apply filters
+                if filter_options['remove_duplicates']:
+                    lineup_filter = LineupFilter(player_pool)
+                    lineups = lineup_filter.remove_exact_duplicates(lineups)
+                
+                if filter_options['apply_similarity']:
+                    lineup_filter = LineupFilter(player_pool)
+                    lineups = lineup_filter.remove_similar_lineups(
+                        lineups,
+                        min_unique_players=filter_options['min_unique_players']
+                    )
+                
+                if filter_options['apply_diversify']:
+                    lineup_filter = LineupFilter(player_pool)
+                    lineups = lineup_filter.diversify_portfolio(
+                        lineups,
+                        target_size=len(lineups),
+                        diversity_weight=filter_options['diversity_weight'],
+                        quality_weight=filter_options['quality_weight']
+                    )
+                
                 st.markdown("---")
                 st.header("📊 Results")
                 
@@ -611,55 +685,52 @@ def main():
                     avg_corr = np.mean([l.get('correlation_score', 0) for l in lineups])
                     st.metric("Avg Correlation", f"{avg_corr:.1f}")
                 
-                # Stacking report (v6.1.0)
-                if enable_stacking_report and stacking_report:
-                    st.markdown("---")
-                    render_stacking_report(stacking_report)
+                # v6.2.0: Exposure report
+                st.markdown("---")
+                render_exposure_report(exposure_report)
                 
-                # Game stack opportunities (v6.1.0)
-                if show_game_stacks:
+                # Stacking report
+                st.markdown("---")
+                render_stacking_report(stacking_report)
+                
+                # v6.2.0: Similarity matrix
+                if st.checkbox("Show Similarity Matrix", value=False):
                     st.markdown("---")
+                    render_similarity_matrix(lineups)
+                
+                # v6.2.0: Find unique lineups
+                if st.checkbox("Show Most Unique Lineups", value=False):
+                    st.markdown("---")
+                    st.markdown("### 🎲 Most Contrarian Lineups")
                     
-                    # Create opponent model to get game stacks
-                    try:
-                        opponent_model = create_opponent_model(
-                            player_pool,
-                            contest_size=contest_size
-                        )
-                        
-                        opportunities = opponent_model.get_game_stack_opportunities(
-                            min_game_total=47.0
-                        )
-                        
-                        if opportunities:
-                            render_game_stack_opportunities(opportunities)
-                        
-                    except Exception as e:
-                        st.info("Game stack detection unavailable (need game data)")
+                    lineup_filter = LineupFilter(player_pool)
+                    unique_lineups = lineup_filter.find_most_unique_lineups(lineups, n=min(10, len(lineups)))
+                    
+                    st.write(f"Showing {len(unique_lineups)} most unique lineups:")
+                    
+                    for i, lineup in enumerate(unique_lineups):
+                        with st.expander(f"Unique Lineup #{i+1}"):
+                            render_enhanced_lineup(lineup, i)
                 
                 # Individual lineups
                 st.markdown("---")
                 st.header("📋 Generated Lineups")
                 
-                # Tabs for each lineup
                 if len(lineups) <= 5:
-                    # Show all if 5 or fewer
                     for i, lineup in enumerate(lineups):
                         st.subheader(f"Lineup #{i+1}")
                         render_enhanced_lineup(lineup, i)
                         st.markdown("---")
                 else:
-                    # Use tabs for many lineups
                     tabs = st.tabs([f"Lineup #{i+1}" for i in range(len(lineups))])
                     for i, (tab, lineup) in enumerate(zip(tabs, lineups)):
                         with tab:
                             render_enhanced_lineup(lineup, i)
                 
-                # Export functionality
+                # Export
                 st.markdown("---")
                 st.subheader("💾 Export")
                 
-                # Convert to CSV
                 export_data = []
                 for i, lineup in enumerate(lineups):
                     for player in lineup['players']:
@@ -679,7 +750,7 @@ def main():
                 st.download_button(
                     label="📥 Download Lineups CSV",
                     data=csv,
-                    file_name="dfs_lineups.csv",
+                    file_name="dfs_lineups_v6.2.0.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
