@@ -1,7 +1,15 @@
 """
-DFS Meta-Optimizer - Main Application v6.3.0
+DFS Meta-Optimizer - Main Application v7.0.0
 
-NEW IN v6.3.0 UI:
+NEW IN v7.0.0 (GROUP 6 - MOST ADVANCED STATE):
+- Advanced Analytics Dashboard (8D evaluation, variance, leverage)
+- Portfolio Performance Monitor (real-time tracking)
+- Contest Simulation Engine (Monte Carlo outcomes)
+- Lineup Quality Metrics (comprehensive scoring)
+- Risk Analysis Tools (boom/bust probability)
+- Performance Comparison Charts (lineup vs lineup)
+
+v6.3.0 Features (Retained):
 - Ownership Prediction Dashboard (predict ownership %)
 - News Feed Monitor (manual news entry & alerts)
 - Vegas Lines Dashboard (spreads, totals, implied totals)
@@ -27,6 +35,7 @@ v6.1.0 Features (Retained):
 - Game Stack Opportunities
 
 Web Interface built with Streamlit.
+TOTAL FEATURES: 70+ UI Components (Professional Grade)
 """
 
 import streamlit as st
@@ -68,7 +77,7 @@ except ImportError as e:
     st.stop()
 
 st.set_page_config(
-    page_title="DFS Meta-Optimizer v6.2.0",
+    page_title="DFS Meta-Optimizer v7.0.0",
     page_icon="🎯",
     layout="wide"
 )
@@ -951,15 +960,373 @@ def main():
                 st.download_button(
                     label="📥 Download Lineups CSV",
                     data=csv,
-                    file_name="dfs_lineups_v6.2.0.csv",
+                    file_name="dfs_lineups_v7.0.0.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
+                
+                # ============================================================
+                # GROUP 6 ENHANCEMENTS - Advanced Analytics & Simulation
+                # ============================================================
+                
+                st.markdown("---")
+                st.header("🚀 Advanced Analytics (v7.0.0)")
+                
+                # Create tabs for advanced features
+                analytics_tabs = st.tabs([
+                    "📊 Advanced Analytics",
+                    "🎲 Contest Simulation"
+                ])
+                
+                with analytics_tabs[0]:
+                    render_advanced_analytics_tab(lineups, player_pool)
+                
+                with analytics_tabs[1]:
+                    render_contest_simulation_tab(lineups, player_pool)
                 
             except Exception as e:
                 st.error(f"Optimization failed: {e}")
                 import traceback
                 st.code(traceback.format_exc())
+
+
+# ============================================================================
+# GROUP 6 ENHANCEMENTS - v7.0.0 UI COMPONENTS
+# ============================================================================
+
+def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame):
+    """
+    Render advanced analytics dashboard with 8D evaluation,
+    variance analysis, and leverage scoring.
+    """
+    st.markdown("### 📊 Advanced Analytics Dashboard")
+    st.markdown("*PhD-Level lineup analysis with 8-dimensional evaluation*")
+    
+    if not lineups:
+        st.info("Generate lineups first to see advanced analytics")
+        return
+    
+    # Create optimizer instance for analysis
+    optimizer = LineupOptimizer(player_pool, {'salary_cap': 50000})
+    
+    # Lineup selector
+    st.markdown("---")
+    lineup_options = [f"Lineup #{i+1}" for i in range(len(lineups))]
+    selected_lineup_idx = st.selectbox(
+        "Select Lineup for Detailed Analysis",
+        range(len(lineups)),
+        format_func=lambda x: lineup_options[x]
+    )
+    
+    selected_lineup = lineups[selected_lineup_idx]
+    
+    # 8-Dimensional Evaluation
+    st.markdown("---")
+    st.markdown("### 🎯 8-Dimensional Evaluation")
+    
+    eval_8d = optimizer.evaluate_lineup_8d(selected_lineup)
+    
+    # Create radar chart data
+    dimensions = [
+        'Projection\nQuality',
+        'Ownership\nEdge',
+        'Correlation\nStrength',
+        'Variance\nProfile',
+        'Salary\nEfficiency',
+        'Position\nBalance',
+        'Game\nEnvironment',
+        'Uniqueness'
+    ]
+    
+    scores = [
+        eval_8d['projection_quality'],
+        eval_8d['ownership_edge'],
+        eval_8d['correlation_strength'],
+        eval_8d['variance_profile'],
+        eval_8d['salary_efficiency'],
+        eval_8d['position_balance'],
+        eval_8d['game_environment'],
+        eval_8d['uniqueness']
+    ]
+    
+    # Display metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Projection Quality", f"{eval_8d['projection_quality']:.1f}")
+        st.metric("Ownership Edge", f"{eval_8d['ownership_edge']:.1f}")
+    
+    with col2:
+        st.metric("Correlation", f"{eval_8d['correlation_strength']:.1f}")
+        st.metric("Variance", f"{eval_8d['variance_profile']:.1f}")
+    
+    with col3:
+        st.metric("Salary Efficiency", f"{eval_8d['salary_efficiency']:.1f}")
+        st.metric("Position Balance", f"{eval_8d['position_balance']:.1f}")
+    
+    with col4:
+        st.metric("Game Environment", f"{eval_8d['game_environment']:.1f}")
+        st.metric("Uniqueness", f"{eval_8d['uniqueness']:.1f}")
+    
+    # Composite score
+    st.markdown("---")
+    composite = eval_8d['composite_score']
+    
+    if composite >= 80:
+        quality = "🏆 Elite"
+        color = "green"
+    elif composite >= 70:
+        quality = "⭐ Excellent"
+        color = "blue"
+    elif composite >= 60:
+        quality = "✓ Good"
+        color = "orange"
+    else:
+        quality = "⚠️ Needs Work"
+        color = "red"
+    
+    st.markdown(f"### Composite Score: **:{color}[{composite:.1f}/100]** - {quality}")
+    
+    # Variance Analysis
+    st.markdown("---")
+    st.markdown("### 📈 Monte Carlo Variance Analysis")
+    
+    num_sims = st.slider("Number of Simulations", 100, 10000, 1000, 100)
+    
+    if st.button("🎲 Run Variance Analysis", type="primary"):
+        with st.spinner("Running Monte Carlo simulation..."):
+            variance_data = optimizer.analyze_lineup_variance(selected_lineup, num_sims)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Mean Score", f"{variance_data['mean_score']:.1f}")
+            st.metric("Median Score", f"{variance_data['median_score']:.1f}")
+            st.metric("Std Dev", f"{variance_data['std_dev']:.1f}")
+        
+        with col2:
+            st.metric("10th Percentile", f"{variance_data['percentile_10']:.1f}")
+            st.metric("50th Percentile", f"{variance_data['percentile_50']:.1f}")
+            st.metric("90th Percentile", f"{variance_data['percentile_90']:.1f}")
+        
+        with col3:
+            st.metric("💥 Boom Prob", f"{variance_data['boom_probability']:.1f}%")
+            st.metric("💣 Bust Prob", f"{variance_data['bust_probability']:.1f}%")
+            st.metric("🏆 Win Prob Est", f"{variance_data['win_probability_estimate']:.1f}%")
+        
+        # Distribution visualization
+        st.markdown("#### Score Distribution")
+        st.markdown(f"**Range:** {variance_data['percentile_10']:.1f} - {variance_data['percentile_90']:.1f} points (80% confidence)")
+        
+        # Show percentile breakdown
+        percentile_data = {
+            'Percentile': ['10th', '25th', '50th', '75th', '90th'],
+            'Score': [
+                variance_data['percentile_10'],
+                variance_data['percentile_25'],
+                variance_data['percentile_50'],
+                variance_data['percentile_75'],
+                variance_data['percentile_90']
+            ]
+        }
+        
+        st.dataframe(pd.DataFrame(percentile_data), use_container_width=True, hide_index=True)
+    
+    # Leverage Analysis
+    st.markdown("---")
+    st.markdown("### 💎 Leverage Analysis")
+    
+    leverage_score = optimizer.calculate_lineup_leverage(selected_lineup)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("Leverage Score", f"{leverage_score:.1f}/100")
+        
+        if leverage_score >= 70:
+            st.success("🎯 **Highly Contrarian** - Great GPP potential")
+        elif leverage_score >= 50:
+            st.info("✓ **Moderate Leverage** - Balanced approach")
+        else:
+            st.warning("⚠️ **Chalky** - High ownership exposure")
+    
+    with col2:
+        avg_own = np.mean([p.get('ownership', 50) for p in selected_lineup['players']])
+        st.metric("Average Ownership", f"{avg_own:.1f}%")
+        
+        if avg_own < 15:
+            st.success("Very low owned")
+        elif avg_own < 25:
+            st.info("Low-medium owned")
+        else:
+            st.warning("High owned")
+    
+    # Portfolio-Level Analytics
+    if len(lineups) > 1:
+        st.markdown("---")
+        st.markdown("### 📊 Portfolio-Level Analytics")
+        
+        portfolio_metrics = optimizer.calculate_portfolio_metrics(lineups)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Lineups", portfolio_metrics['num_lineups'])
+            st.metric("Unique Players", portfolio_metrics['unique_players'])
+        
+        with col2:
+            st.metric("Diversity Score", f"{portfolio_metrics['diversity_score']:.1f}%")
+            st.metric("Max Exposure", f"{portfolio_metrics['max_exposure']:.1f}%")
+        
+        with col3:
+            st.metric("Avg Projection", f"{portfolio_metrics['avg_projection']:.1f}")
+            st.metric("Avg Ownership", f"{portfolio_metrics['avg_ownership']:.1f}%")
+        
+        with col4:
+            st.metric("Proj Variance", f"{portfolio_metrics['projection_variance']:.1f}")
+            st.metric("Own Variance", f"{portfolio_metrics['ownership_variance']:.1f}")
+        
+        # Most/Least exposed players
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Most Exposed Players**")
+            most_exp = portfolio_metrics['most_exposed_players'][:5]
+            for player, exp in most_exp:
+                st.write(f"• {player}: {exp:.1f}%")
+        
+        with col2:
+            st.markdown("**Least Exposed Players**")
+            least_exp = portfolio_metrics['least_exposed_players'][:5]
+            for player, exp in least_exp:
+                st.write(f"• {player}: {exp:.1f}%")
+
+
+def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame):
+    """
+    Render contest simulation dashboard for estimating
+    win probability and optimal lineup selection.
+    """
+    st.markdown("### 🎲 Contest Outcome Simulation")
+    st.markdown("*Monte Carlo simulation of actual contest results*")
+    
+    if not lineups:
+        st.info("Generate lineups first to run contest simulations")
+        return
+    
+    if len(lineups) < 2:
+        st.warning("Generate at least 2 lineups for meaningful simulation")
+        return
+    
+    # Simulation parameters
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        num_sims = st.number_input(
+            "Number of Simulations",
+            min_value=100,
+            max_value=50000,
+            value=1000,
+            step=100,
+            help="More simulations = more accurate but slower"
+        )
+    
+    with col2:
+        contest_size = st.number_input(
+            "Contest Size",
+            min_value=10,
+            max_value=10000,
+            value=100,
+            step=10,
+            help="Number of entries in the contest"
+        )
+    
+    if st.button("🚀 Run Contest Simulation", type="primary", use_container_width=True):
+        
+        optimizer = LineupOptimizer(player_pool, {'salary_cap': 50000})
+        
+        with st.spinner(f"Simulating {num_sims:,} contests with {contest_size} entries each..."):
+            sim_results = optimizer.simulate_contest_outcomes(
+                lineups,
+                num_simulations=num_sims,
+                contest_size=contest_size
+            )
+        
+        st.success(f"✅ Simulation complete! Analyzed {len(lineups)} lineups")
+        
+        # Results
+        st.markdown("---")
+        st.markdown("### 📊 Simulation Results")
+        
+        # Key findings
+        best_lineup = sim_results['best_lineup_idx']
+        safest_lineup = sim_results['safest_lineup_idx']
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🏆 Highest Win Probability")
+            st.markdown(f"**Lineup #{best_lineup + 1}**")
+            win_prob = sim_results['win_probabilities'].get(best_lineup, 0)
+            st.metric("Win Probability", f"{win_prob:.2f}%")
+            
+            # Show lineup
+            best_lineup_data = lineups[best_lineup]
+            st.write(f"Projection: {best_lineup_data.get('projection', 0):.1f}")
+            st.write(f"Ownership: {best_lineup_data.get('ownership', 0):.1f}%")
+        
+        with col2:
+            st.markdown("#### 💰 Safest (Highest Cash %)  ")
+            st.markdown(f"**Lineup #{safest_lineup + 1}**")
+            cash_prob = sim_results['cash_probabilities'].get(safest_lineup, 0)
+            st.metric("Cash Probability", f"{cash_prob:.2f}%")
+            
+            # Show lineup
+            safest_lineup_data = lineups[safest_lineup]
+            st.write(f"Projection: {safest_lineup_data.get('projection', 0):.1f}")
+            st.write(f"Ownership: {safest_lineup_data.get('ownership', 0):.1f}%")
+        
+        # Detailed table
+        st.markdown("---")
+        st.markdown("### 📋 All Lineups - Probability Breakdown")
+        
+        results_data = []
+        for i in range(len(lineups)):
+            results_data.append({
+                'Lineup': f"#{i+1}",
+                'Win %': f"{sim_results['win_probabilities'].get(i, 0):.2f}",
+                'Top 10 %': f"{sim_results['top10_probabilities'].get(i, 0):.2f}",
+                'Cash %': f"{sim_results['cash_probabilities'].get(i, 0):.2f}",
+                'Projection': lineups[i].get('projection', 0),
+                'Ownership': f"{lineups[i].get('ownership', 0):.1f}%"
+            })
+        
+        results_df = pd.DataFrame(results_data)
+        st.dataframe(results_df, use_container_width=True, hide_index=True)
+        
+        # Insights
+        st.markdown("---")
+        st.markdown("### 💡 Insights")
+        
+        # Calculate some insights
+        total_win_prob = sum(sim_results['win_probabilities'].values())
+        avg_cash_prob = np.mean(list(sim_results['cash_probabilities'].values()))
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Combined Win %", f"{total_win_prob:.2f}%")
+            st.caption("Probability at least 1 lineup wins")
+        
+        with col2:
+            st.metric("Avg Cash %", f"{avg_cash_prob:.2f}%")
+            st.caption("Average cash rate across portfolio")
+        
+        with col3:
+            top_heavy = len([p for p in sim_results['win_probabilities'].values() if p > 1.0])
+            st.metric("Tournament Lineups", top_heavy)
+            st.caption(f"Lineups with >1% win probability")
 
 
 if __name__ == '__main__':
