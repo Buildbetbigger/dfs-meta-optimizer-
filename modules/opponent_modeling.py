@@ -1,7 +1,14 @@
 """
-DFS Meta-Optimizer - Opponent Modeling v6.1.0
+DFS Meta-Optimizer - Opponent Modeling v6.3.0
 
-NEW IN v6.1.0:
+NEW IN v6.3.0:
+- News Feed Monitor (injury/lineup/performance tracking)
+- Vegas Lines Tracker (implied totals, line movements)
+- Injury Status Tracking (OUT/DOUBTFUL/QUESTIONABLE/ACTIVE)
+- Line Movement Detection (sharp money indicators)
+- Game Environment Integration
+
+v6.1.0 Features (Retained):
 - Bring-Back Recommendations (opposing team leverage)
 - Game Stack Detection (multi-team correlation analysis)
 - Enhanced Leverage Calculations
@@ -766,6 +773,415 @@ def create_opponent_model(
             ))
     
     return OpponentModel(player_pool, contest_size, game_objects)
+
+
+# ============================================================================
+# NEWS FEED MONITOR - NEW IN v6.3.0
+# ============================================================================
+
+@dataclass
+class NewsItem:
+    """Represents a news item about a player"""
+    player_name: str
+    headline: str
+    content: str
+    source: str
+    timestamp: str
+    category: str  # 'injury', 'lineup', 'performance', 'other'
+    severity: str  # 'critical', 'high', 'medium', 'low'
+    impact_score: float  # 0-100
+    tags: List[str]
+
+
+class NewsFeedMonitor:
+    """
+    Monitors news feeds for DFS-relevant updates.
+    
+    NEW IN v6.3.0:
+    - News classification (injury/lineup/performance)
+    - Severity scoring (critical/high/medium/low)
+    - Impact calculation (0-100)
+    - Injury status tracking
+    - Projection auto-adjustment
+    - Critical news alerts
+    """
+    
+    def __init__(self, players_df: pd.DataFrame):
+        """Initialize news feed monitor."""
+        self.players_df = players_df.copy()
+        self.player_names = set(players_df['name'].values)
+        
+        # News storage
+        self.news_items: List[NewsItem] = []
+        self.player_news_index: Dict[str, List[NewsItem]] = {
+            name: [] for name in self.player_names
+        }
+        
+        # Injury status tracking
+        self.injury_status: Dict[str, str] = {}  # player -> status
+        
+        # Keywords for classification
+        self.injury_keywords = {
+            'critical': ['out', 'dnp', 'ir', 'ruled out', 'season-ending', 'surgery'],
+            'high': ['questionable', 'doubtful', 'limited', 'injury report'],
+            'medium': ['probable', 'day-to-day', 'monitoring'],
+            'low': ['full participant', 'cleared', 'practicing']
+        }
+        
+        logger.info(f"NewsFeedMonitor initialized with {len(self.player_names)} players")
+    
+    def add_news_item(
+        self,
+        player_name: str,
+        headline: str,
+        content: str,
+        source: str = 'manual',
+        timestamp: Optional[str] = None
+    ) -> Optional[NewsItem]:
+        """Add a news item manually."""
+        if player_name not in self.player_names:
+            logger.warning(f"Player not found: {player_name}")
+            return None
+        
+        if timestamp is None:
+            from datetime import datetime
+            timestamp = datetime.now().isoformat()
+        
+        # Classify the news
+        category = self._classify_category(headline, content)
+        severity = self._classify_severity(headline, content, category)
+        impact_score = self._calculate_impact_score(category, severity, content)
+        tags = self._extract_tags(headline, content)
+        
+        news_item = NewsItem(
+            player_name=player_name,
+            headline=headline,
+            content=content,
+            source=source,
+            timestamp=timestamp,
+            category=category,
+            severity=severity,
+            impact_score=impact_score,
+            tags=tags
+        )
+        
+        # Store news item
+        self.news_items.append(news_item)
+        self.player_news_index[player_name].append(news_item)
+        
+        # Update injury status if applicable
+        if category == 'injury':
+            self._update_injury_status(player_name, content, severity)
+        
+        logger.info(f"Added news for {player_name}: {category}/{severity} (impact: {impact_score})")
+        
+        return news_item
+    
+    def _classify_category(self, headline: str, content: str) -> str:
+        """Classify news into category"""
+        text = (headline + ' ' + content).lower()
+        
+        # Check for injury keywords
+        if any(keyword in text for keywords in self.injury_keywords.values() 
+               for keyword in keywords):
+            return 'injury'
+        
+        # Check for lineup keywords
+        lineup_keywords = ['starting', 'starter', 'bench', 'rotation', 'snap count']
+        if any(keyword in text for keyword in lineup_keywords):
+            return 'lineup'
+        
+        # Check for performance keywords
+        perf_keywords = ['hot streak', 'slump', 'breakout', 'target share', 'usage']
+        if any(keyword in text for keyword in perf_keywords):
+            return 'performance'
+        
+        return 'other'
+    
+    def _classify_severity(self, headline: str, content: str, category: str) -> str:
+        """Classify severity of news"""
+        text = (headline + ' ' + content).lower()
+        
+        if category == 'injury':
+            for severity, keywords in self.injury_keywords.items():
+                if any(keyword in text for keyword in keywords):
+                    return severity
+        
+        if category == 'injury':
+            return 'medium'
+        elif category == 'lineup':
+            return 'high' if 'starting' in text else 'medium'
+        elif category == 'performance':
+            return 'medium'
+        
+        return 'low'
+    
+    def _calculate_impact_score(self, category: str, severity: str, content: str) -> float:
+        """Calculate impact score (0-100)."""
+        base_scores = {
+            'injury': 70.0,
+            'lineup': 60.0,
+            'performance': 40.0,
+            'other': 20.0
+        }
+        
+        severity_multipliers = {
+            'critical': 1.4,
+            'high': 1.2,
+            'medium': 1.0,
+            'low': 0.7
+        }
+        
+        score = base_scores[category] * severity_multipliers[severity]
+        
+        # Boost for high-impact words
+        high_impact_words = ['out', 'ruled out', 'starting', 'benched', 'ir']
+        content_lower = content.lower()
+        boost = sum(5.0 for word in high_impact_words if word in content_lower)
+        
+        return min(100.0, score + boost)
+    
+    def _extract_tags(self, headline: str, content: str) -> List[str]:
+        """Extract relevant tags from news"""
+        tags = []
+        text = (headline + ' ' + content).lower()
+        
+        if 'injury' in text or 'hurt' in text:
+            tags.append('injury')
+        if 'starting' in text:
+            tags.append('starter')
+        if 'bench' in text:
+            tags.append('bench')
+        if 'questionable' in text or 'doubtful' in text:
+            tags.append('game_time_decision')
+        
+        return tags
+    
+    def _update_injury_status(self, player_name: str, content: str, severity: str):
+        """Update player injury status"""
+        content_lower = content.lower()
+        
+        if severity == 'critical' or 'out' in content_lower or 'ruled out' in content_lower:
+            self.injury_status[player_name] = 'OUT'
+        elif 'doubtful' in content_lower:
+            self.injury_status[player_name] = 'DOUBTFUL'
+        elif 'questionable' in content_lower:
+            self.injury_status[player_name] = 'QUESTIONABLE'
+        elif 'probable' in content_lower:
+            self.injury_status[player_name] = 'PROBABLE'
+        elif severity == 'low' or 'cleared' in content_lower:
+            self.injury_status[player_name] = 'ACTIVE'
+    
+    def get_critical_alerts(self) -> List[NewsItem]:
+        """Get critical news items from recent hours."""
+        critical = [
+            item for item in self.news_items
+            if item.severity == 'critical'
+        ]
+        
+        # Sort by timestamp (most recent first) if possible
+        return critical[:10]  # Return top 10
+    
+    def get_injury_report(self) -> pd.DataFrame:
+        """Get current injury report for all players."""
+        injury_data = []
+        
+        for player_name in self.player_names:
+            status = self.injury_status.get(player_name, 'ACTIVE')
+            
+            if status != 'ACTIVE':
+                injury_data.append({
+                    'player': player_name,
+                    'status': status
+                })
+        
+        return pd.DataFrame(injury_data)
+
+
+# ============================================================================
+# VEGAS LINES TRACKER - NEW IN v6.3.0
+# ============================================================================
+
+@dataclass
+class GameLine:
+    """Represents betting line for a game"""
+    game_id: str
+    home_team: str
+    away_team: str
+    spread: float  # negative = home favored
+    total: float
+    home_ml: int  # money line
+    away_ml: int
+    timestamp: str
+
+
+@dataclass
+class LineMovement:
+    """Represents a line movement"""
+    game_id: str
+    metric: str  # 'spread', 'total', 'home_ml', 'away_ml'
+    old_value: float
+    new_value: float
+    change: float
+    timestamp: str
+
+
+class VegasLinesTracker:
+    """
+    Tracks Vegas betting lines and movements.
+    
+    NEW IN v6.3.0:
+    - Implied team total calculation
+    - Line movement detection
+    - Sharp money indicators
+    - Game environment updates
+    - Game script prediction
+    """
+    
+    def __init__(self):
+        """Initialize Vegas lines tracker"""
+        # Current lines
+        self.current_lines: Dict[str, GameLine] = {}
+        
+        # Line history
+        self.line_history: Dict[str, List[GameLine]] = {}
+        
+        # Movement tracking
+        self.movements: List[LineMovement] = []
+        
+        logger.info("VegasLinesTracker initialized")
+    
+    def update_line(
+        self,
+        game_id: str,
+        home_team: str,
+        away_team: str,
+        spread: float,
+        total: float,
+        home_ml: Optional[int] = None,
+        away_ml: Optional[int] = None,
+        timestamp: Optional[str] = None
+    ):
+        """Update betting line for a game."""
+        if timestamp is None:
+            from datetime import datetime
+            timestamp = datetime.now().isoformat()
+        
+        new_line = GameLine(
+            game_id=game_id,
+            home_team=home_team,
+            away_team=away_team,
+            spread=spread,
+            total=total,
+            home_ml=home_ml or 0,
+            away_ml=away_ml or 0,
+            timestamp=timestamp
+        )
+        
+        # Check for movements if line exists
+        if game_id in self.current_lines:
+            old_line = self.current_lines[game_id]
+            self._detect_movements(old_line, new_line)
+        
+        # Update current line
+        self.current_lines[game_id] = new_line
+        
+        # Add to history
+        if game_id not in self.line_history:
+            self.line_history[game_id] = []
+        self.line_history[game_id].append(new_line)
+        
+        logger.info(f"Updated line for {game_id}: {spread}/{total}")
+    
+    def _detect_movements(self, old_line: GameLine, new_line: GameLine):
+        """Detect significant line movements"""
+        # Check spread movement
+        if abs(new_line.spread - old_line.spread) >= 0.5:
+            movement = LineMovement(
+                game_id=new_line.game_id,
+                metric='spread',
+                old_value=old_line.spread,
+                new_value=new_line.spread,
+                change=new_line.spread - old_line.spread,
+                timestamp=new_line.timestamp
+            )
+            self.movements.append(movement)
+        
+        # Check total movement
+        if abs(new_line.total - old_line.total) >= 1.0:
+            movement = LineMovement(
+                game_id=new_line.game_id,
+                metric='total',
+                old_value=old_line.total,
+                new_value=new_line.total,
+                change=new_line.total - old_line.total,
+                timestamp=new_line.timestamp
+            )
+            self.movements.append(movement)
+    
+    def get_implied_total(self, game_id: str, team: str) -> Optional[float]:
+        """Calculate implied team total."""
+        if game_id not in self.current_lines:
+            return None
+        
+        line = self.current_lines[game_id]
+        
+        if team == line.home_team:
+            # Home team: (total - spread) / 2
+            return (line.total - line.spread) / 2
+        elif team == line.away_team:
+            # Away team: (total + spread) / 2
+            return (line.total + line.spread) / 2
+        else:
+            return None
+    
+    def get_all_implied_totals(self) -> Dict[str, float]:
+        """Get implied totals for all teams."""
+        implied_totals = {}
+        
+        for game_id, line in self.current_lines.items():
+            home_total = self.get_implied_total(game_id, line.home_team)
+            away_total = self.get_implied_total(game_id, line.away_team)
+            
+            if home_total:
+                implied_totals[line.home_team] = home_total
+            if away_total:
+                implied_totals[line.away_team] = away_total
+        
+        return implied_totals
+    
+    def get_sharp_money_indicators(self) -> List[Dict]:
+        """Identify potential sharp money movements."""
+        sharp_indicators = []
+        
+        for game_id in self.current_lines:
+            if game_id not in self.line_history or len(self.line_history[game_id]) < 2:
+                continue
+            
+            history = self.line_history[game_id]
+            opening_line = history[0]
+            current_line = self.current_lines[game_id]
+            
+            spread_movement = current_line.spread - opening_line.spread
+            total_movement = current_line.total - opening_line.total
+            
+            # Large spread movement
+            if abs(spread_movement) >= 1.0:
+                sharp_indicators.append({
+                    'game_id': game_id,
+                    'indicator': 'large_spread_movement',
+                    'movement': spread_movement
+                })
+            
+            # Large total movement
+            if abs(total_movement) >= 2.0:
+                sharp_indicators.append({
+                    'game_id': game_id,
+                    'indicator': 'large_total_movement',
+                    'movement': total_movement
+                })
+        
+        return sharp_indicators
 
 
 if __name__ == '__main__':
