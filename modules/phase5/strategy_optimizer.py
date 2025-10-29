@@ -1,6 +1,14 @@
 """
-Module 5: Strategy Optimizer
-Finds optimal settings through simulation-based testing
+DFS Meta-Optimizer v7.0.0 - Strategy Optimizer Module
+Automated parameter tuning through simulation
+
+Features:
+- Single/multi-parameter optimization
+- A/B testing framework
+- Grid search
+- Sensitivity analysis
+- Contest-specific tuning
+- Automated strategy improvement
 """
 
 import pandas as pd
@@ -16,12 +24,12 @@ class StrategyOptimizer:
     """
     Optimizes strategy parameters through simulation.
     
-    Features:
-    - Parameter grid search
-    - A/B testing
-    - Objective optimization (ROI, win rate, etc.)
-    - Multi-parameter optimization
-    - Results visualization
+    NEW v7.0.0 Features:
+    - Automated parameter tuning
+    - Scientific A/B testing
+    - Multi-parameter grid search
+    - Contest-specific optimization
+    - Self-improving intelligence
     """
     
     def __init__(self, optimizer_function: Callable, simulator_function: Callable):
@@ -29,13 +37,13 @@ class StrategyOptimizer:
         Initialize strategy optimizer.
         
         Args:
-            optimizer_function: Function that generates lineups (e.g., AdvancedOptimizer.generate)
-            simulator_function: Function that simulates contests (e.g., MonteCarloSimulator.simulate)
+            optimizer_function: Function that generates lineups
+            simulator_function: Function that simulates contests
         """
         self.optimizer_function = optimizer_function
         self.simulator_function = simulator_function
         
-        logger.info("StrategyOptimizer initialized")
+        logger.info("StrategyOptimizer v7.0.0 initialized")
     
     def test_single_parameter(
         self,
@@ -67,32 +75,37 @@ class StrategyOptimizer:
             config = base_config.copy()
             config[parameter_name] = value
             
-            # Generate lineups with this config
-            lineups = self.optimizer_function(**config)
+            try:
+                # Generate lineups with this config
+                lineups = self.optimizer_function(**config)
+                
+                # Simulate performance
+                sim_result = self.simulator_function(lineups, num_simulations=num_simulations)
+                
+                results.append({
+                    parameter_name: value,
+                    'expected_roi': sim_result.get('expected_roi', 0),
+                    'win_rate': sim_result.get('win_rate', 0),
+                    'cash_rate': sim_result.get('cash_rate', 0),
+                    'top_10_rate': sim_result.get('top_10_rate', 0),
+                    'avg_score': sim_result.get('avg_score', 0)
+                })
+                
+                logger.info(f"{parameter_name}={value}: ROI={sim_result.get('expected_roi', 0):.1f}%")
             
-            # Simulate performance
-            sim_result = self.simulator_function(lineups, num_simulations=num_simulations)
-            
-            results.append({
-                parameter_name: value,
-                'expected_roi': sim_result.expected_roi,
-                'win_rate': sim_result.win_rate,
-                'cash_rate': sim_result.cash_rate,
-                'top_10_rate': sim_result.top_10_rate,
-                'avg_score': sim_result.avg_score
-            })
-            
-            logger.info(f"{parameter_name}={value}: ROI={sim_result.expected_roi:.1f}%, "
-                       f"Win={sim_result.win_rate:.2f}%")
+            except Exception as e:
+                logger.error(f"Error testing {parameter_name}={value}: {e}")
+                continue
         
         df = pd.DataFrame(results)
         
-        # Find optimal value
-        optimal_idx = df[objective].idxmax()
-        optimal_value = df.loc[optimal_idx, parameter_name]
-        optimal_score = df.loc[optimal_idx, objective]
-        
-        logger.info(f"Optimal {parameter_name}: {optimal_value} ({objective}={optimal_score:.2f})")
+        if not df.empty:
+            # Find optimal value
+            optimal_idx = df[objective].idxmax()
+            optimal_value = df.loc[optimal_idx, parameter_name]
+            optimal_score = df.loc[optimal_idx, objective]
+            
+            logger.info(f"Optimal {parameter_name}: {optimal_value} ({objective}={optimal_score:.2f})")
         
         return df
     
@@ -106,6 +119,8 @@ class StrategyOptimizer:
     ) -> pd.DataFrame:
         """
         Test multiple parameters via grid search.
+        
+        NEW v7.0.0: Find optimal parameter combinations!
         
         Args:
             parameters: Dict of {parameter_name: [values_to_test]}
@@ -139,8 +154,8 @@ class StrategyOptimizer:
             for param_name, value in zip(param_names, combo):
                 config[param_name] = value
             
-            # Generate lineups
             try:
+                # Generate lineups
                 lineups = self.optimizer_function(**config)
                 
                 # Simulate
@@ -148,10 +163,10 @@ class StrategyOptimizer:
                 
                 result = {
                     **{name: val for name, val in zip(param_names, combo)},
-                    'expected_roi': sim_result.expected_roi,
-                    'win_rate': sim_result.win_rate,
-                    'cash_rate': sim_result.cash_rate,
-                    'top_10_rate': sim_result.top_10_rate
+                    'expected_roi': sim_result.get('expected_roi', 0),
+                    'win_rate': sim_result.get('win_rate', 0),
+                    'cash_rate': sim_result.get('cash_rate', 0),
+                    'top_10_rate': sim_result.get('top_10_rate', 0)
                 }
                 
                 results.append(result)
@@ -185,6 +200,8 @@ class StrategyOptimizer:
         """
         A/B test two strategy configurations.
         
+        NEW v7.0.0: Scientific strategy comparison!
+        
         Args:
             config_a: First configuration
             config_b: Second configuration
@@ -197,53 +214,61 @@ class StrategyOptimizer:
         """
         logger.info(f"A/B testing: {test_name_a} vs {test_name_b}")
         
-        # Test Strategy A
-        lineups_a = self.optimizer_function(**config_a)
-        sim_a = self.simulator_function(lineups_a, num_simulations=num_simulations)
-        
-        # Test Strategy B
-        lineups_b = self.optimizer_function(**config_b)
-        sim_b = self.simulator_function(lineups_b, num_simulations=num_simulations)
-        
-        # Compare
-        comparison = {
-            'strategy_a': {
-                'name': test_name_a,
-                'config': config_a,
-                'expected_roi': sim_a.expected_roi,
-                'win_rate': sim_a.win_rate,
-                'cash_rate': sim_a.cash_rate,
-                'top_10_rate': sim_a.top_10_rate,
-                'avg_score': sim_a.avg_score
-            },
-            'strategy_b': {
-                'name': test_name_b,
-                'config': config_b,
-                'expected_roi': sim_b.expected_roi,
-                'win_rate': sim_b.win_rate,
-                'cash_rate': sim_b.cash_rate,
-                'top_10_rate': sim_b.top_10_rate,
-                'avg_score': sim_b.avg_score
-            },
-            'differences': {
-                'roi_diff': sim_b.expected_roi - sim_a.expected_roi,
-                'win_rate_diff': sim_b.win_rate - sim_a.win_rate,
-                'cash_rate_diff': sim_b.cash_rate - sim_a.cash_rate
+        try:
+            # Test Strategy A
+            lineups_a = self.optimizer_function(**config_a)
+            sim_a = self.simulator_function(lineups_a, num_simulations=num_simulations)
+            
+            # Test Strategy B
+            lineups_b = self.optimizer_function(**config_b)
+            sim_b = self.simulator_function(lineups_b, num_simulations=num_simulations)
+            
+            # Compare
+            comparison = {
+                'strategy_a': {
+                    'name': test_name_a,
+                    'config': config_a,
+                    'expected_roi': sim_a.get('expected_roi', 0),
+                    'win_rate': sim_a.get('win_rate', 0),
+                    'cash_rate': sim_a.get('cash_rate', 0),
+                    'top_10_rate': sim_a.get('top_10_rate', 0),
+                    'avg_score': sim_a.get('avg_score', 0)
+                },
+                'strategy_b': {
+                    'name': test_name_b,
+                    'config': config_b,
+                    'expected_roi': sim_b.get('expected_roi', 0),
+                    'win_rate': sim_b.get('win_rate', 0),
+                    'cash_rate': sim_b.get('cash_rate', 0),
+                    'top_10_rate': sim_b.get('top_10_rate', 0),
+                    'avg_score': sim_b.get('avg_score', 0)
+                },
+                'differences': {
+                    'roi_diff': sim_b.get('expected_roi', 0) - sim_a.get('expected_roi', 0),
+                    'win_rate_diff': sim_b.get('win_rate', 0) - sim_a.get('win_rate', 0),
+                    'cash_rate_diff': sim_b.get('cash_rate', 0) - sim_a.get('cash_rate', 0)
+                }
             }
-        }
+            
+            # Determine winner
+            roi_a = sim_a.get('expected_roi', 0)
+            roi_b = sim_b.get('expected_roi', 0)
+            
+            if roi_b > roi_a:
+                comparison['winner'] = test_name_b
+                comparison['winner_advantage'] = roi_b - roi_a
+            else:
+                comparison['winner'] = test_name_a
+                comparison['winner_advantage'] = roi_a - roi_b
+            
+            logger.info(f"Winner: {comparison['winner']} "
+                       f"(+{comparison['winner_advantage']:.1f}% ROI)")
+            
+            return comparison
         
-        # Determine winner
-        if sim_b.expected_roi > sim_a.expected_roi:
-            comparison['winner'] = test_name_b
-            comparison['improvement'] = sim_b.expected_roi - sim_a.expected_roi
-        else:
-            comparison['winner'] = test_name_a
-            comparison['improvement'] = sim_a.expected_roi - sim_b.expected_roi
-        
-        logger.info(f"Winner: {comparison['winner']} "
-                   f"(+{comparison['improvement']:.1f}% ROI)")
-        
-        return comparison
+        except Exception as e:
+            logger.error(f"A/B test failed: {e}")
+            return {}
     
     def optimize_exposure(
         self,
@@ -270,6 +295,9 @@ class StrategyOptimizer:
             objective='expected_roi'
         )
         
+        if results.empty:
+            return {}
+        
         optimal_idx = results['expected_roi'].idxmax()
         optimal_exposure = results.loc[optimal_idx, 'max_player_exposure']
         optimal_roi = results.loc[optimal_idx, 'expected_roi']
@@ -289,6 +317,8 @@ class StrategyOptimizer:
     ) -> Dict:
         """
         Optimize parameters for specific contest type.
+        
+        NEW v7.0.0: Contest-specific auto-tuning!
         
         Args:
             contest_type: 'MILLY_MAKER', 'GPP', 'CASH', etc.
@@ -317,6 +347,9 @@ class StrategyOptimizer:
             objective=objective
         )
         
+        if results.empty:
+            return {}
+        
         # Get optimal configuration
         optimal_idx = results[objective].idxmax()
         optimal_config = results.loc[optimal_idx].to_dict()
@@ -327,31 +360,6 @@ class StrategyOptimizer:
             'optimal_config': optimal_config,
             'all_results': results
         }
-    
-    def compare_modes(
-        self,
-        modes: List[str],
-        base_config: Dict,
-        num_simulations: int = 5000
-    ) -> pd.DataFrame:
-        """
-        Compare different optimization modes.
-        
-        Args:
-            modes: List of mode names ('GENETIC_GPP', 'LEVERAGE_FIRST', etc.)
-            base_config: Base configuration
-            num_simulations: Simulations per mode
-        
-        Returns:
-            DataFrame with mode comparison
-        """
-        return self.test_single_parameter(
-            parameter_name='mode',
-            values=modes,
-            base_config=base_config,
-            num_simulations=num_simulations,
-            objective='expected_roi'
-        )
     
     def find_optimal_portfolio_size(
         self,
@@ -379,6 +387,9 @@ class StrategyOptimizer:
             num_simulations=num_simulations,
             objective='expected_roi'
         )
+        
+        if results.empty:
+            return {}
         
         # Calculate total expected profit for each size
         results['total_entries'] = results['num_lineups'] * entry_fee
