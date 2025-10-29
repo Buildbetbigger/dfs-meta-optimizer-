@@ -1,22 +1,29 @@
 """
-DFS Meta-Optimizer - Optimization Engine v6.1.0
+DFS Meta-Optimizer - Optimization Engine v6.2.0
 
-NEW IN v6.1.0:
+NEW IN v6.2.0:
+- ExposureRule System (hard/soft caps with priority)
+- Exposure-Aware Portfolio Generation
+- Portfolio Rebalancing (fix violations)
+- Lineup Filtering (duplicates, similarity)
+- Smart Portfolio Diversification
+- Tiered Portfolio Generation (safe/balanced/contrarian)
+- Similarity Matrix Visualization
+- Find Most Unique Lineups
+- Batch Filtering Pipeline
+- Underexposed Player Detection
+- Exposure Balance Analysis
+- Comprehensive Exposure Reports
+
+v6.1.0 Features (Retained):
 - Contest Presets (8 pre-configured strategies)
-- Advanced Stacking with research-backed correlation coefficients
-- Full Correlation Matrix for player relationships
-- QB Stack Scoring with detailed identification
-- Bring-Back Logic for opposing team players
-- Game Stack Detection for multi-team stacking
-- Correlation Scoring (0-100 lineup quality metric)
-- Stacking Reports for comprehensive analysis
-
-Core Features:
-- Genetic Algorithm v2 with tournament selection
-- Monte Carlo simulation (10,000+ iterations)
-- Diversity controls (edit distance, position balance)
-- Exposure management with soft/hard caps
-- Stack-aware optimization
+- Advanced Stacking with research-backed correlations
+- Full Correlation Matrix
+- QB Stack Scoring
+- Bring-Back Logic
+- Game Stack Detection
+- Correlation Scoring (0-100)
+- Stacking Reports
 """
 
 import pandas as pd
@@ -25,14 +32,606 @@ from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 from itertools import combinations
 import random
-from collections import defaultdict
+from collections import defaultdict, Counter
 import logging
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# CONTEST PRESETS - NEW IN v6.1.0
+# EXPOSURE RULES - NEW IN v6.2.0
+# ============================================================================
+
+@dataclass
+class ExposureRule:
+    """
+    Represents an exposure rule for a player, position, or team.
+    
+    Attributes:
+        player_name: Specific player (None for position/team rules)
+        position: Position group (None for player/team rules)
+        team: Team (None for player/position rules)
+        min_exposure: Minimum exposure % (0-100)
+        max_exposure: Maximum exposure % (0-100)
+        rule_type: 'hard' (must enforce) or 'soft' (prefer but flexible)
+        priority: Higher number = enforced first
+    """
+    player_name: Optional[str] = None
+    position: Optional[str] = None
+    team: Optional[str] = None
+    min_exposure: float = 0.0
+    max_exposure: float = 100.0
+    rule_type: str = 'hard'  # 'hard' or 'soft'
+    priority: int = 1
+
+
+# ============================================================================
+# EXPOSURE MANAGER - NEW IN v6.2.0
+# ============================================================================
+
+class ExposureManager:
+    """
+    Manages player exposure across a portfolio of lineups.
+    
+    Features:
+    - Hard caps (must not exceed)
+    - Soft caps (prefer not to exceed)
+    - Player/position/team-based rules
+    - Global exposure limits
+    - Compliance checking
+    - Exposure reports
+    """
+    
+    def __init__(self, player_pool: pd.DataFrame):
+        self.player_pool = player_pool.copy()
+        self.exposure_rules: List[ExposureRule] = []
+        self.global_max_exposure = 40.0  # Default: 40% max
+        self.global_min_exposure = 0.0
+        
+    def add_rule(
+        self,
+        player_name: Optional[str] = None,
+        position: Optional[str] = None,
+        team: Optional[str] = None,
+        min_exposure: float = 0.0,
+        max_exposure: float = 100.0,
+        rule_type: str = 'hard',
+        priority: int = 1
+    ):
+        """Add an exposure rule."""
+        rule = ExposureRule(
+            player_name=player_name,
+            position=position,
+            team=team,
+            min_exposure=min_exposure,
+            max_exposure=max_exposure,
+            rule_type=rule_type,
+            priority=priority
+        )
+        
+        self.exposure_rules.append(rule)
+        self.exposure_rules.sort(key=lambda r: r.priority, reverse=True)
+        
+        logger.info(f"Added {rule_type} exposure rule: {player_name or position or team}, "
+                   f"{min_exposure}-{max_exposure}%, priority {priority}")
+    
+    def clear_rules(self):
+        """Clear all exposure rules."""
+        self.exposure_rules.clear()
+        logger.info("All exposure rules cleared")
+    
+    def set_global_max_exposure(self, max_pct: float):
+        """Set global maximum exposure for all players."""
+        self.global_max_exposure = max_pct
+        logger.info(f"Global max exposure set to {max_pct}%")
+    
+    def calculate_current_exposure(self, lineups: List[Dict]) -> Dict[str, float]:
+        """
+        Calculate current exposure for each player.
+        
+        Returns:
+            Dictionary of {player_name: exposure_percentage}
+        """
+        if not lineups:
+            return {}
+        
+        player_counts = Counter()
+        
+        for lineup in lineups:
+            for player in lineup.get('players', []):
+                player_counts[player['name']] += 1
+        
+        total_lineups = len(lineups)
+        exposure_pct = {
+            player: (count / total_lineups) * 100
+            for player, count in player_counts.items()
+        }
+        
+        return exposure_pct
+    
+    def check_exposure_compliance(
+        self,
+        lineups: List[Dict],
+        strict_mode: bool = False
+    ) -> Dict:
+        """
+        Check if lineups comply with exposure rules.
+        
+        Returns:
+            Dictionary with compliance status and violations
+        """
+        exposure = self.calculate_current_exposure(lineups)
+        violations = []
+        warnings = []
+        
+        # Check each rule
+        for rule in self.exposure_rules:
+            is_hard_rule = rule.rule_type == 'hard' or strict_mode
+            
+            # Player-specific rule
+            if rule.player_name:
+                player_exp = exposure.get(rule.player_name, 0.0)
+                
+                if player_exp < rule.min_exposure or player_exp > rule.max_exposure:
+                    violation = {
+                        'rule_type': rule.rule_type,
+                        'player': rule.player_name,
+                        'current_exposure': player_exp,
+                        'min_allowed': rule.min_exposure,
+                        'max_allowed': rule.max_exposure,
+                        'severity': 'violation' if is_hard_rule else 'warning'
+                    }
+                    
+                    if is_hard_rule:
+                        violations.append(violation)
+                    else:
+                        warnings.append(violation)
+            
+            # Position-based rule
+            elif rule.position:
+                position_players = self.player_pool[
+                    self.player_pool['position'] == rule.position
+                ]['name'].tolist()
+                
+                for player in position_players:
+                    player_exp = exposure.get(player, 0.0)
+                    
+                    if player_exp < rule.min_exposure or player_exp > rule.max_exposure:
+                        violation = {
+                            'rule_type': rule.rule_type,
+                            'player': player,
+                            'position': rule.position,
+                            'current_exposure': player_exp,
+                            'min_allowed': rule.min_exposure,
+                            'max_allowed': rule.max_exposure,
+                            'severity': 'violation' if is_hard_rule else 'warning'
+                        }
+                        
+                        if is_hard_rule:
+                            violations.append(violation)
+                        else:
+                            warnings.append(violation)
+            
+            # Team-based rule
+            elif rule.team:
+                team_players = self.player_pool[
+                    self.player_pool['team'] == rule.team
+                ]['name'].tolist()
+                
+                for player in team_players:
+                    player_exp = exposure.get(player, 0.0)
+                    
+                    if player_exp < rule.min_exposure or player_exp > rule.max_exposure:
+                        violation = {
+                            'rule_type': rule.rule_type,
+                            'player': player,
+                            'team': rule.team,
+                            'current_exposure': player_exp,
+                            'min_allowed': rule.min_exposure,
+                            'max_allowed': rule.max_exposure,
+                            'severity': 'violation' if is_hard_rule else 'warning'
+                        }
+                        
+                        if is_hard_rule:
+                            violations.append(violation)
+                        else:
+                            warnings.append(violation)
+        
+        # Check global max
+        for player, exp in exposure.items():
+            if exp > self.global_max_exposure:
+                violations.append({
+                    'rule_type': 'global',
+                    'player': player,
+                    'current_exposure': exp,
+                    'max_allowed': self.global_max_exposure,
+                    'severity': 'violation'
+                })
+        
+        return {
+            'compliant': len(violations) == 0,
+            'violations': violations,
+            'warnings': warnings,
+            'total_violations': len(violations),
+            'total_warnings': len(warnings)
+        }
+    
+    def enforce_exposure_on_lineup(
+        self,
+        candidate_lineup: Dict,
+        existing_lineups: List[Dict],
+        total_target_lineups: int
+    ) -> bool:
+        """
+        Check if adding this lineup would violate hard exposure rules.
+        
+        Returns:
+            True if lineup can be added, False if it would violate
+        """
+        # Calculate exposure including this candidate
+        test_lineups = existing_lineups + [candidate_lineup]
+        exposure = self.calculate_current_exposure(test_lineups)
+        
+        # Project to final portfolio size
+        projection_multiplier = total_target_lineups / len(test_lineups)
+        
+        # Check hard rules only
+        for rule in self.exposure_rules:
+            if rule.rule_type != 'hard':
+                continue
+            
+            if rule.player_name:
+                player_exp = exposure.get(rule.player_name, 0.0) * projection_multiplier
+                if player_exp > rule.max_exposure:
+                    return False
+            
+            elif rule.position:
+                position_players = self.player_pool[
+                    self.player_pool['position'] == rule.position
+                ]['name'].tolist()
+                
+                for player in position_players:
+                    player_exp = exposure.get(player, 0.0) * projection_multiplier
+                    if player_exp > rule.max_exposure:
+                        return False
+            
+            elif rule.team:
+                team_players = self.player_pool[
+                    self.player_pool['team'] == rule.team
+                ]['name'].tolist()
+                
+                for player in team_players:
+                    player_exp = exposure.get(player, 0.0) * projection_multiplier
+                    if player_exp > rule.max_exposure:
+                        return False
+        
+        # Check global max
+        for player, exp in exposure.items():
+            projected_exp = exp * projection_multiplier
+            if projected_exp > self.global_max_exposure:
+                return False
+        
+        return True
+    
+    def get_exposure_report(self, lineups: List[Dict], top_n: int = 20) -> pd.DataFrame:
+        """Generate detailed exposure report."""
+        exposure = self.calculate_current_exposure(lineups)
+        
+        report_data = []
+        
+        for player, exp_pct in sorted(exposure.items(), key=lambda x: x[1], reverse=True)[:top_n]:
+            player_data = self.player_pool[self.player_pool['name'] == player]
+            
+            if player_data.empty:
+                continue
+            
+            player_info = player_data.iloc[0]
+            
+            # Check compliance
+            is_compliant = exp_pct <= self.global_max_exposure
+            
+            for rule in self.exposure_rules:
+                if rule.rule_type == 'hard':
+                    if rule.player_name == player:
+                        is_compliant = is_compliant and (rule.min_exposure <= exp_pct <= rule.max_exposure)
+            
+            report_data.append({
+                'Player': player,
+                'Position': player_info['position'],
+                'Team': player_info['team'],
+                'Exposure %': round(exp_pct, 1),
+                'Count': int((exp_pct / 100) * len(lineups)),
+                'Salary': int(player_info['salary']),
+                'Projection': round(float(player_info['projection']), 1),
+                'Compliant': '✓' if is_compliant else '✗'
+            })
+        
+        return pd.DataFrame(report_data)
+    
+    def get_underexposed_players(self, lineups: List[Dict], threshold: float = 5.0) -> List[str]:
+        """Get list of players below exposure threshold."""
+        exposure = self.calculate_current_exposure(lineups)
+        all_players = set(self.player_pool['name'].tolist())
+        
+        underexposed = []
+        for player in all_players:
+            if exposure.get(player, 0.0) < threshold:
+                underexposed.append(player)
+        
+        return underexposed
+    
+    def suggest_exposure_adjustments(self, lineups: List[Dict]) -> List[Dict]:
+        """Suggest adjustments to improve exposure compliance."""
+        compliance = self.check_exposure_compliance(lineups)
+        suggestions = []
+        
+        for violation in compliance['violations']:
+            player = violation['player']
+            current = violation['current_exposure']
+            max_allowed = violation.get('max_allowed', self.global_max_exposure)
+            
+            if current > max_allowed:
+                reduce_by = current - max_allowed
+                lineups_to_remove = int(np.ceil((reduce_by / 100) * len(lineups)))
+                
+                suggestions.append({
+                    'type': 'reduce_exposure',
+                    'player': player,
+                    'current': current,
+                    'target': max_allowed,
+                    'action': f"Remove {player} from ~{lineups_to_remove} lineups",
+                    'priority': 'high'
+                })
+        
+        return suggestions
+
+
+# ============================================================================
+# LINEUP FILTER - NEW IN v6.2.0
+# ============================================================================
+
+class LineupFilter:
+    """
+    Filters and deduplicates lineup portfolios.
+    
+    Features:
+    - Exact duplicate detection
+    - Similarity-based filtering
+    - Smart portfolio diversification
+    - Similarity matrix generation
+    - Find most unique lineups
+    - Batch filtering pipeline
+    """
+    
+    def __init__(self, player_pool: pd.DataFrame):
+        self.player_pool = player_pool.copy()
+    
+    def remove_exact_duplicates(self, lineups: List[Dict]) -> List[Dict]:
+        """Remove exact duplicate lineups."""
+        seen = set()
+        unique_lineups = []
+        duplicates_removed = 0
+        
+        for lineup in lineups:
+            # Create hashable representation
+            players_tuple = tuple(sorted(p['name'] for p in lineup['players']))
+            lineup_hash = players_tuple
+            
+            if lineup_hash not in seen:
+                seen.add(lineup_hash)
+                unique_lineups.append(lineup)
+            else:
+                duplicates_removed += 1
+        
+        if duplicates_removed > 0:
+            logger.info(f"Removed {duplicates_removed} exact duplicates")
+        
+        return unique_lineups
+    
+    def remove_similar_lineups(
+        self,
+        lineups: List[Dict],
+        min_unique_players: int = 2
+    ) -> List[Dict]:
+        """Remove lineups that differ by fewer than N players."""
+        if min_unique_players <= 0:
+            return lineups
+        
+        filtered_lineups = []
+        removed_count = 0
+        
+        for candidate in lineups:
+            candidate_players = set(p['name'] for p in candidate['players'])
+            is_unique_enough = True
+            
+            for existing in filtered_lineups:
+                existing_players = set(p['name'] for p in existing['players'])
+                different_players = len(candidate_players ^ existing_players)
+                
+                if different_players < min_unique_players:
+                    is_unique_enough = False
+                    break
+            
+            if is_unique_enough:
+                filtered_lineups.append(candidate)
+            else:
+                removed_count += 1
+        
+        if removed_count > 0:
+            logger.info(f"Removed {removed_count} similar lineups (min_unique={min_unique_players})")
+        
+        return filtered_lineups
+    
+    def diversify_portfolio(
+        self,
+        lineups: List[Dict],
+        target_size: int,
+        diversity_weight: float = 0.6,
+        quality_weight: float = 0.4
+    ) -> List[Dict]:
+        """
+        Select diverse portfolio balancing diversity and quality.
+        
+        Algorithm:
+        1. Start with highest projection lineup
+        2. Iteratively add lineup with best (diversity + quality) score
+        3. Continue until target size reached
+        """
+        if len(lineups) <= target_size:
+            return lineups
+        
+        logger.info(f"Diversifying portfolio from {len(lineups)} to {target_size} lineups")
+        
+        # Normalize weights
+        total_weight = diversity_weight + quality_weight
+        diversity_weight /= total_weight
+        quality_weight /= total_weight
+        
+        # Start with highest projection
+        lineups_sorted = sorted(
+            lineups,
+            key=lambda x: x.get('projection', 0),
+            reverse=True
+        )
+        
+        selected = [lineups_sorted[0]]
+        remaining = lineups_sorted[1:]
+        
+        while len(selected) < target_size and remaining:
+            best_score = -1
+            best_lineup = None
+            best_idx = -1
+            
+            for idx, candidate in enumerate(remaining):
+                # Calculate diversity score
+                candidate_players = set(p['name'] for p in candidate['players'])
+                diversity_scores = []
+                
+                for existing in selected:
+                    existing_players = set(p['name'] for p in existing['players'])
+                    unique_players = len(candidate_players ^ existing_players)
+                    diversity_scores.append(unique_players / 9.0)  # Normalize to 0-1
+                
+                avg_diversity = np.mean(diversity_scores)
+                
+                # Calculate quality score
+                projections = [l.get('projection', 0) for l in remaining]
+                max_proj = max(projections)
+                min_proj = min(projections)
+                
+                if max_proj > min_proj:
+                    quality_score = (candidate.get('projection', 0) - min_proj) / (max_proj - min_proj)
+                else:
+                    quality_score = 1.0
+                
+                # Combined score
+                combined_score = (
+                    diversity_weight * avg_diversity +
+                    quality_weight * quality_score
+                )
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_lineup = candidate
+                    best_idx = idx
+            
+            if best_lineup:
+                selected.append(best_lineup)
+                remaining.pop(best_idx)
+        
+        logger.info(f"Diversified portfolio to {len(selected)} lineups")
+        return selected
+    
+    def get_lineup_similarity_matrix(self, lineups: List[Dict]) -> pd.DataFrame:
+        """Calculate similarity matrix for all lineup pairs."""
+        n = len(lineups)
+        similarity_matrix = np.zeros((n, n))
+        
+        for i in range(n):
+            for j in range(i, n):
+                if i == j:
+                    similarity_matrix[i, j] = 100.0
+                else:
+                    players_i = set(p['name'] for p in lineups[i]['players'])
+                    players_j = set(p['name'] for p in lineups[j]['players'])
+                    
+                    shared = len(players_i & players_j)
+                    similarity = (shared / 9.0) * 100  # 9 players in NFL lineup
+                    
+                    similarity_matrix[i, j] = similarity
+                    similarity_matrix[j, i] = similarity
+        
+        lineup_names = [f"Lineup {i+1}" for i in range(n)]
+        df = pd.DataFrame(
+            similarity_matrix,
+            index=lineup_names,
+            columns=lineup_names
+        )
+        
+        return df
+    
+    def find_most_unique_lineups(self, lineups: List[Dict], n: int = 10) -> List[Dict]:
+        """Find N most unique (contrarian) lineups in portfolio."""
+        if len(lineups) <= n:
+            return lineups
+        
+        uniqueness_scores = []
+        
+        for i, candidate in enumerate(lineups):
+            candidate_players = set(p['name'] for p in candidate['players'])
+            total_uniqueness = 0
+            
+            for j, other in enumerate(lineups):
+                if i == j:
+                    continue
+                
+                other_players = set(p['name'] for p in other['players'])
+                unique_count = len(candidate_players ^ other_players)
+                total_uniqueness += unique_count
+            
+            avg_uniqueness = total_uniqueness / (len(lineups) - 1)
+            uniqueness_scores.append((i, avg_uniqueness))
+        
+        uniqueness_scores.sort(key=lambda x: x[1], reverse=True)
+        top_indices = [idx for idx, _ in uniqueness_scores[:n]]
+        
+        return [lineups[idx] for idx in top_indices]
+    
+    def batch_filter(self, lineups: List[Dict], filters: List[Dict]) -> List[Dict]:
+        """Apply multiple filters in sequence."""
+        filtered = lineups.copy()
+        
+        for filter_config in filters:
+            filter_type = filter_config.get('type')
+            
+            if filter_type == 'duplicates':
+                filtered = self.remove_exact_duplicates(filtered)
+            
+            elif filter_type == 'similarity':
+                filtered = self.remove_similar_lineups(
+                    filtered,
+                    min_unique_players=filter_config.get('min_unique_players', 2)
+                )
+            
+            elif filter_type == 'diversify':
+                filtered = self.diversify_portfolio(
+                    filtered,
+                    target_size=filter_config.get('target_size', len(filtered)),
+                    diversity_weight=filter_config.get('diversity_weight', 0.6),
+                    quality_weight=filter_config.get('quality_weight', 0.4)
+                )
+            
+            if not filtered:
+                logger.warning(f"All lineups filtered out at filter: {filter_type}")
+                break
+        
+        logger.info(f"Batch filtering: {len(lineups)} → {len(filtered)} lineups")
+        return filtered
+
+
+# ============================================================================
+# CONTEST PRESETS - From v6.1.0
 # ============================================================================
 
 @dataclass
@@ -50,7 +649,8 @@ class ContestPreset:
     diversity_threshold: float
     use_genetic: bool
     enable_bring_back: bool
-    
+    max_exposure: float = 40.0  # NEW in v6.2.0
+
 CONTEST_PRESETS = {
     'cash': ContestPreset(
         name='Cash Game',
@@ -64,7 +664,8 @@ CONTEST_PRESETS = {
         num_lineups=1,
         diversity_threshold=0.0,
         use_genetic=False,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=100.0  # No exposure limits for single entry
     ),
     'gpp_small': ContestPreset(
         name='Small Field GPP',
@@ -78,7 +679,8 @@ CONTEST_PRESETS = {
         num_lineups=3,
         diversity_threshold=4.0,
         use_genetic=True,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=50.0
     ),
     'gpp_large': ContestPreset(
         name='Large Field GPP',
@@ -92,7 +694,8 @@ CONTEST_PRESETS = {
         num_lineups=20,
         diversity_threshold=5.0,
         use_genetic=True,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=40.0
     ),
     'gpp_massive': ContestPreset(
         name='Massive GPP (Milly Maker)',
@@ -106,7 +709,8 @@ CONTEST_PRESETS = {
         num_lineups=150,
         diversity_threshold=6.0,
         use_genetic=True,
-        enable_bring_back=False  # Too contrarian
+        enable_bring_back=False,
+        max_exposure=30.0
     ),
     'contrarian': ContestPreset(
         name='Contrarian',
@@ -120,7 +724,8 @@ CONTEST_PRESETS = {
         num_lineups=10,
         diversity_threshold=5.5,
         use_genetic=True,
-        enable_bring_back=False
+        enable_bring_back=False,
+        max_exposure=35.0
     ),
     'balanced': ContestPreset(
         name='Balanced',
@@ -134,7 +739,8 @@ CONTEST_PRESETS = {
         num_lineups=5,
         diversity_threshold=4.5,
         use_genetic=True,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=45.0
     ),
     'showdown': ContestPreset(
         name='Showdown',
@@ -148,7 +754,8 @@ CONTEST_PRESETS = {
         num_lineups=20,
         diversity_threshold=3.0,
         use_genetic=True,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=40.0
     ),
     'turbo': ContestPreset(
         name='Turbo',
@@ -162,62 +769,43 @@ CONTEST_PRESETS = {
         num_lineups=3,
         diversity_threshold=3.0,
         use_genetic=False,
-        enable_bring_back=True
+        enable_bring_back=True,
+        max_exposure=50.0
     )
 }
 
 
 # ============================================================================
-# CORRELATION COEFFICIENTS - NEW IN v6.1.0
+# CORRELATION MATRIX - From v6.1.0
 # ============================================================================
 
 class CorrelationMatrix:
-    """
-    Research-backed correlation coefficients for NFL DFS.
-    Based on academic research and 10+ years of DFS data.
-    """
+    """Research-backed correlation coefficients for NFL DFS."""
     
-    # QB correlations (to other positions)
-    QB_TO_WR1 = 0.52  # Strong positive correlation
-    QB_TO_WR2 = 0.31  # Moderate positive
-    QB_TO_WR3 = 0.18  # Weak positive
-    QB_TO_TE = 0.28   # Moderate positive
-    QB_TO_RB = -0.12  # Slight negative (rushing TDs vs passing)
-    QB_TO_DST = -0.45 # Strong negative (opponent defense)
+    QB_TO_WR1 = 0.52
+    QB_TO_WR2 = 0.31
+    QB_TO_WR3 = 0.18
+    QB_TO_TE = 0.28
+    QB_TO_RB = -0.12
+    QB_TO_DST = -0.45
     
-    # Same-team correlations
-    WR1_TO_WR2 = -0.22  # Moderate negative (target share)
-    WR1_TO_RB = -0.15   # Slight negative
-    RB1_TO_RB2 = -0.38  # Strong negative (touch share)
+    WR1_TO_WR2 = -0.22
+    WR1_TO_RB = -0.15
+    RB1_TO_RB2 = -0.38
     
-    # Game stack correlations
-    QB_TO_OPP_WR = 0.41  # Bring-back correlation
-    QB_TO_OPP_TE = 0.24  # Bring-back correlation
-    WR_TO_OPP_WR = 0.33  # Game script correlation
+    QB_TO_OPP_WR = 0.41
+    QB_TO_OPP_TE = 0.24
+    WR_TO_OPP_WR = 0.33
     
-    # Defense correlations
-    DST_TO_SAME_RB = -0.08  # Slight negative
-    DST_TO_OPP_OFF = -0.52  # Strong negative
+    DST_TO_SAME_RB = -0.08
+    DST_TO_OPP_OFF = -0.52
     
     @classmethod
     def get_correlation(cls, player1_pos: str, player2_pos: str, 
                        same_team: bool, same_game: bool,
                        qb_primary: bool = False) -> float:
-        """
-        Calculate correlation between two players.
-        
-        Args:
-            player1_pos: Position of first player (QB, WR, RB, TE, DST)
-            player2_pos: Position of second player
-            same_team: Whether players are on same team
-            same_game: Whether players are in same game
-            qb_primary: Whether player1 is the primary QB in the stack
-            
-        Returns:
-            Correlation coefficient (-1.0 to 1.0)
-        """
+        """Calculate correlation between two players."""
         if same_team:
-            # Same-team correlations
             if player1_pos == 'QB':
                 if player2_pos == 'WR':
                     return cls.QB_TO_WR1 if qb_primary else cls.QB_TO_WR2
@@ -239,7 +827,6 @@ class CorrelationMatrix:
                     return cls.DST_TO_SAME_RB
                     
         elif same_game:
-            # Opposing team correlations (bring-back)
             if player1_pos == 'QB':
                 if player2_pos == 'WR':
                     return cls.QB_TO_OPP_WR
@@ -250,17 +837,11 @@ class CorrelationMatrix:
             if player1_pos == 'DST':
                 return cls.DST_TO_OPP_OFF
                 
-        # No meaningful correlation
         return 0.0
     
     @classmethod
     def get_full_matrix(cls, lineup: List[Dict]) -> np.ndarray:
-        """
-        Generate full correlation matrix for a lineup.
-        
-        Returns:
-            NxN matrix where N is number of players
-        """
+        """Generate full correlation matrix for a lineup."""
         n = len(lineup)
         matrix = np.zeros((n, n))
         
@@ -268,8 +849,7 @@ class CorrelationMatrix:
             for j in range(i+1, n):
                 p1, p2 = lineup[i], lineup[j]
                 same_team = p1.get('team') == p2.get('team')
-                # Assume same_game if teams are opponents (would need game data)
-                same_game = False  # Would need matchup data
+                same_game = False
                 
                 corr = cls.get_correlation(
                     p1.get('position', ''),
@@ -284,13 +864,13 @@ class CorrelationMatrix:
 
 
 # ============================================================================
-# STACK IDENTIFICATION - NEW IN v6.1.0
+# STACK ANALYZER - From v6.1.0
 # ============================================================================
 
 @dataclass
 class StackInfo:
     """Detailed information about a stack in a lineup."""
-    stack_type: str  # 'QB+WR', 'QB+2WR', 'QB+WR+TE', 'game_stack'
+    stack_type: str
     players: List[str]
     positions: List[str]
     team: str
@@ -299,28 +879,21 @@ class StackInfo:
     bring_back_players: List[str]
     stack_salary: int
     stack_ownership: float
-    
+
 class StackAnalyzer:
     """Analyze and score stacks within lineups."""
     
     @staticmethod
     def identify_stacks(lineup: List[Dict]) -> List[StackInfo]:
-        """
-        Identify all stacks in a lineup.
-        
-        Returns:
-            List of StackInfo objects describing each stack
-        """
+        """Identify all stacks in a lineup."""
         stacks = []
-        
-        # Group players by team
         teams = defaultdict(list)
+        
         for player in lineup:
             team = player.get('team', '')
             if team:
                 teams[team].append(player)
         
-        # Identify QB-based stacks
         for team, players in teams.items():
             qbs = [p for p in players if p.get('position') == 'QB']
             wrs = [p for p in players if p.get('position') == 'WR']
@@ -331,16 +904,13 @@ class StackAnalyzer:
                 stack_players = [qb]
                 stack_positions = ['QB']
                 
-                # Add receivers
                 stack_players.extend(wrs)
                 stack_positions.extend(['WR'] * len(wrs))
                 
-                # Add tight ends
                 stack_players.extend(tes)
                 stack_positions.extend(['TE'] * len(tes))
                 
                 if len(stack_players) >= 2:
-                    # Determine stack type
                     if len(wrs) >= 2:
                         stack_type = 'QB+2WR' if not tes else 'QB+2WR+TE'
                     elif len(wrs) == 1 and tes:
@@ -350,15 +920,8 @@ class StackAnalyzer:
                     else:
                         stack_type = 'QB+TE'
                     
-                    # Calculate correlation score
-                    corr_score = StackAnalyzer._calculate_stack_correlation(
-                        stack_players
-                    )
-                    
-                    # Check for bring-back
-                    bring_back = StackAnalyzer._find_bring_back(
-                        lineup, team, qb.get('opponent', '')
-                    )
+                    corr_score = StackAnalyzer._calculate_stack_correlation(stack_players)
+                    bring_back = StackAnalyzer._find_bring_back(lineup, team, qb.get('opponent', ''))
                     
                     stacks.append(StackInfo(
                         stack_type=stack_type,
@@ -382,7 +945,6 @@ class StackAnalyzer:
         
         total_corr = 0.0
         pairs = 0
-        
         qb = next((p for p in players if p.get('position') == 'QB'), None)
         
         for i, p1 in enumerate(players):
@@ -400,9 +962,8 @@ class StackAnalyzer:
         if pairs == 0:
             return 0.0
         
-        # Convert to 0-100 scale
         avg_corr = total_corr / pairs
-        score = (avg_corr + 1.0) * 50  # Map [-1, 1] to [0, 100]
+        score = (avg_corr + 1.0) * 50
         return round(score, 1)
     
     @staticmethod
@@ -422,22 +983,57 @@ class StackAnalyzer:
 
 
 # ============================================================================
-# LINEUP OPTIMIZER - Enhanced v6.1.0
+# STACKING REPORT - From v6.1.0
+# ============================================================================
+
+class StackingReport:
+    """Generate comprehensive stacking analysis reports."""
+    
+    @staticmethod
+    def generate_report(lineups: List[Dict]) -> Dict:
+        """Generate comprehensive stacking report."""
+        if not lineups:
+            return {}
+        
+        all_stacks = []
+        for lineup in lineups:
+            all_stacks.extend(lineup.get('stacks', []))
+        
+        if not all_stacks:
+            return {'total_stacks': 0, 'message': 'No stacks identified'}
+        
+        stack_types = defaultdict(int)
+        bring_back_count = 0
+        correlation_scores = []
+        
+        for stack in all_stacks:
+            stack_types[stack.stack_type] += 1
+            if stack.has_bring_back:
+                bring_back_count += 1
+            correlation_scores.append(stack.correlation_score)
+        
+        return {
+            'total_stacks': len(all_stacks),
+            'unique_stack_types': len(stack_types),
+            'stack_type_breakdown': dict(stack_types),
+            'bring_back_percentage': (bring_back_count / len(all_stacks)) * 100,
+            'avg_correlation_score': np.mean(correlation_scores),
+            'max_correlation_score': max(correlation_scores),
+            'min_correlation_score': min(correlation_scores),
+            'top_stacks': sorted(all_stacks, key=lambda x: x.correlation_score, reverse=True)[:5]
+        }
+
+
+# ============================================================================
+# LINEUP OPTIMIZER - Enhanced v6.2.0
 # ============================================================================
 
 class LineupOptimizer:
     """
-    Advanced DFS lineup optimizer with v6.1.0 features.
+    Advanced DFS lineup optimizer with v6.2.0 features.
     """
     
     def __init__(self, player_pool: pd.DataFrame, config: Dict):
-        """
-        Initialize optimizer.
-        
-        Args:
-            player_pool: DataFrame with player data
-            config: Optimization configuration
-        """
         self.player_pool = player_pool.copy()
         self.config = config
         self.salary_cap = config.get('salary_cap', 50000)
@@ -445,12 +1041,15 @@ class LineupOptimizer:
             'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 1, 'DST': 1
         })
         
+        # v6.2.0: Initialize exposure and filtering
+        self.exposure_manager = ExposureManager(player_pool)
+        self.lineup_filter = LineupFilter(player_pool)
+        
         # v6.1.0: Load contest preset if specified
         preset_name = config.get('contest_preset')
         if preset_name and preset_name in CONTEST_PRESETS:
             self._apply_preset(CONTEST_PRESETS[preset_name])
         
-        # Ensure required columns
         self._validate_player_pool()
         
     def _apply_preset(self, preset: ContestPreset):
@@ -467,6 +1066,10 @@ class LineupOptimizer:
             'use_genetic': preset.use_genetic,
             'enable_bring_back': preset.enable_bring_back
         })
+        
+        # v6.2.0: Set exposure from preset
+        self.exposure_manager.set_global_max_exposure(preset.max_exposure)
+        
         logger.info(f"Applied preset: {preset.name}")
         
     def _validate_player_pool(self):
@@ -476,7 +1079,6 @@ class LineupOptimizer:
             if col not in self.player_pool.columns:
                 raise ValueError(f"Player pool missing required column: {col}")
         
-        # Add optional columns with defaults
         if 'projection' not in self.player_pool.columns:
             self.player_pool['projection'] = 0.0
         if 'ownership' not in self.player_pool.columns:
@@ -487,25 +1089,209 @@ class LineupOptimizer:
             self.player_pool['ceiling'] = self.player_pool['projection'] * 1.3
         if 'opponent' not in self.player_pool.columns:
             self.player_pool['opponent'] = ''
-            
+    
     def generate_lineups(self, num_lineups: int = 1) -> List[Dict]:
         """
-        Generate optimal lineups.
-        
-        Args:
-            num_lineups: Number of lineups to generate
-            
-        Returns:
-            List of lineup dictionaries
+        Generate optimal lineups with v6.2.0 exposure awareness.
         """
         method = self.config.get('optimization_method', 'genetic')
         
+        # Generate larger pool
+        pool_size = num_lineups * 3
+        
         if method == 'genetic' and self.config.get('use_genetic', True):
-            return self._generate_genetic(num_lineups)
-        elif method == 'monte_carlo':
-            return self._generate_monte_carlo(num_lineups)
+            candidate_lineups = self._generate_genetic(pool_size)
         else:
-            return self._generate_greedy(num_lineups)
+            candidate_lineups = self._generate_greedy(pool_size)
+        
+        # v6.2.0: Filter with exposure awareness
+        selected_lineups = []
+        
+        for candidate in candidate_lineups:
+            if len(selected_lineups) >= num_lineups:
+                break
+            
+            # Check exposure compliance
+            if self.exposure_manager.enforce_exposure_on_lineup(
+                candidate,
+                selected_lineups,
+                num_lineups
+            ):
+                selected_lineups.append(candidate)
+        
+        # v6.2.0: Apply filtering
+        selected_lineups = self.lineup_filter.remove_exact_duplicates(selected_lineups)
+        
+        diversity_threshold = self.config.get('diversity_threshold', 4.0)
+        if diversity_threshold > 0:
+            selected_lineups = self.lineup_filter.remove_similar_lineups(
+                selected_lineups,
+                min_unique_players=int(diversity_threshold)
+            )
+        
+        return selected_lineups
+    
+    def generate_portfolio_tiered(
+        self,
+        num_lineups: int,
+        tier_distribution: Dict[str, float] = None
+    ) -> Dict[str, List[Dict]]:
+        """
+        Generate tiered portfolio (v6.2.0).
+        
+        Default: 30% safe, 50% balanced, 20% contrarian
+        """
+        if tier_distribution is None:
+            tier_distribution = {
+                'safe': 0.30,
+                'balanced': 0.50,
+                'contrarian': 0.20
+            }
+        
+        logger.info(f"Generating tiered portfolio: {num_lineups} lineups")
+        
+        tiers = {}
+        
+        for tier_name, percentage in tier_distribution.items():
+            tier_size = int(num_lineups * percentage)
+            
+            if tier_size == 0:
+                continue
+            
+            # Adjust config for tier
+            tier_config = self.config.copy()
+            
+            if tier_name == 'safe':
+                tier_config['ownership_weight'] = 0.1
+                tier_config['leverage_weight'] = 0.1
+                tier_config['ceiling_weight'] = 0.3
+            elif tier_name == 'contrarian':
+                tier_config['ownership_weight'] = 0.7
+                tier_config['leverage_weight'] = 0.8
+                tier_config['ceiling_weight'] = 0.5
+            
+            # Generate tier lineups
+            tier_optimizer = LineupOptimizer(self.player_pool, tier_config)
+            tier_lineups = tier_optimizer.generate_lineups(tier_size)
+            
+            tiers[tier_name] = tier_lineups
+            
+            logger.info(f"Generated {len(tier_lineups)} {tier_name} lineups")
+        
+        return tiers
+    
+    def rebalance_portfolio(
+        self,
+        lineups: List[Dict],
+        max_iterations: int = 5
+    ) -> List[Dict]:
+        """
+        Rebalance portfolio to fix exposure violations (v6.2.0).
+        """
+        rebalanced = deepcopy(lineups)
+        
+        for iteration in range(max_iterations):
+            compliance = self.exposure_manager.check_exposure_compliance(rebalanced)
+            
+            if compliance['compliant']:
+                logger.info(f"Portfolio rebalanced in {iteration} iterations")
+                return rebalanced
+            
+            # Fix violations
+            suggestions = self.exposure_manager.suggest_exposure_adjustments(rebalanced)
+            
+            for suggestion in suggestions[:3]:  # Fix top 3
+                player_to_reduce = suggestion['player']
+                
+                # Find lineups with this player
+                for idx, lineup in enumerate(rebalanced):
+                    player_names = [p['name'] for p in lineup['players']]
+                    
+                    if player_to_reduce in player_names:
+                        # Try to replace
+                        replacement = self._find_replacement_player(
+                            lineup,
+                            player_to_reduce,
+                            rebalanced
+                        )
+                        
+                        if replacement:
+                            # Replace player
+                            new_players = [
+                                replacement if p['name'] == player_to_reduce else p
+                                for p in lineup['players']
+                            ]
+                            
+                            rebalanced[idx] = self._recalculate_lineup_metrics(new_players)
+                            break
+        
+        logger.warning(f"Portfolio rebalancing did not fully converge after {max_iterations} iterations")
+        return rebalanced
+    
+    def _find_replacement_player(
+        self,
+        lineup: Dict,
+        player_to_replace: str,
+        portfolio: List[Dict]
+    ) -> Optional[Dict]:
+        """Find suitable replacement player."""
+        # Get player data
+        old_player = next((p for p in lineup['players'] if p['name'] == player_to_replace), None)
+        
+        if not old_player:
+            return None
+        
+        # Calculate available salary
+        current_salary = sum(p.get('salary', 0) for p in lineup['players'])
+        available_salary = old_player.get('salary', 0)
+        
+        # Find candidates
+        current_exposure = self.exposure_manager.calculate_current_exposure(portfolio)
+        
+        candidates = self.player_pool[
+            (self.player_pool['position'] == old_player['position']) &
+            (self.player_pool['salary'] <= available_salary) &
+            (self.player_pool['name'] != player_to_replace) &
+            (~self.player_pool['name'].isin([p['name'] for p in lineup['players']]))
+        ].copy()
+        
+        if candidates.empty:
+            return None
+        
+        # Prefer underexposed players
+        candidates['current_exposure'] = candidates['name'].map(
+            lambda x: current_exposure.get(x, 0.0)
+        )
+        
+        candidates['score'] = (
+            candidates['projection'] * 0.6 +
+            (100 - candidates['current_exposure']) * 0.4
+        )
+        
+        best_candidate = candidates.nlargest(1, 'score')
+        
+        if not best_candidate.empty:
+            return best_candidate.iloc[0].to_dict()
+        
+        return None
+    
+    def _recalculate_lineup_metrics(self, players: List[Dict]) -> Dict:
+        """Recalculate metrics for modified lineup."""
+        total_proj = sum(p.get('projection', 0) for p in players)
+        total_own = np.mean([p.get('ownership', 10) for p in players])
+        total_salary = sum(p.get('salary', 0) for p in players)
+        
+        stacks = StackAnalyzer.identify_stacks(players)
+        correlation_score = max((s.correlation_score for s in stacks), default=0)
+        
+        return {
+            'players': players,
+            'projection': total_proj,
+            'salary': total_salary,
+            'ownership': total_own,
+            'stacks': stacks,
+            'correlation_score': correlation_score
+        }
     
     def _generate_greedy(self, num_lineups: int) -> List[Dict]:
         """Generate lineups using greedy algorithm."""
@@ -516,12 +1302,9 @@ class LineupOptimizer:
             lineup = self._build_single_lineup(used_players)
             if lineup:
                 lineups.append(lineup)
-                # Apply exposure limits
                 for player in lineup['players']:
                     player_name = player['name']
-                    max_exposure = self.config.get('max_exposure', {}).get(
-                        player_name, 1.0
-                    )
+                    max_exposure = self.config.get('max_exposure', {}).get(player_name, 1.0)
                     if i >= int(num_lineups * max_exposure):
                         used_players.add(player_name)
         
@@ -529,7 +1312,6 @@ class LineupOptimizer:
     
     def _build_single_lineup(self, exclude_players: Set[str]) -> Optional[Dict]:
         """Build a single optimized lineup."""
-        # Filter available players
         available = self.player_pool[
             ~self.player_pool['name'].isin(exclude_players)
         ].copy()
@@ -537,21 +1319,16 @@ class LineupOptimizer:
         if len(available) < sum(self.positions.values()):
             return None
         
-        # Calculate composite score
         available['composite_score'] = self._calculate_composite_score(available)
         
-        # Build lineup by position
         lineup_players = []
         remaining_salary = self.salary_cap
         
-        # Fill required positions
         for pos, count in self.positions.items():
             if pos == 'FLEX':
                 continue
                 
-            pos_players = available[available['position'] == pos].nlargest(
-                count, 'composite_score'
-            )
+            pos_players = available[available['position'] == pos].nlargest(count, 'composite_score')
             
             for _, player in pos_players.iterrows():
                 if player['salary'] <= remaining_salary:
@@ -559,14 +1336,9 @@ class LineupOptimizer:
                     remaining_salary -= player['salary']
                     available = available[available['name'] != player['name']]
         
-        # Fill FLEX
         if 'FLEX' in self.positions:
-            flex_eligible = available[
-                available['position'].isin(['RB', 'WR', 'TE'])
-            ]
-            flex_player = flex_eligible[
-                flex_eligible['salary'] <= remaining_salary
-            ].nlargest(1, 'composite_score')
+            flex_eligible = available[available['position'].isin(['RB', 'WR', 'TE'])]
+            flex_player = flex_eligible[flex_eligible['salary'] <= remaining_salary].nlargest(1, 'composite_score')
             
             if not flex_player.empty:
                 lineup_players.append(flex_player.iloc[0].to_dict())
@@ -575,26 +1347,20 @@ class LineupOptimizer:
         if len(lineup_players) != sum(self.positions.values()):
             return None
         
-        # Calculate lineup metrics
         total_proj = sum(p.get('projection', 0) for p in lineup_players)
         total_own = np.mean([p.get('ownership', 10) for p in lineup_players])
         total_salary = sum(p.get('salary', 0) for p in lineup_players)
         
-        # v6.1.0: Analyze stacks
         stacks = StackAnalyzer.identify_stacks(lineup_players)
-        
-        # v6.1.0: Calculate correlation score
-        correlation_score = 0.0
-        if stacks:
-            correlation_score = max(s.correlation_score for s in stacks)
+        correlation_score = max((s.correlation_score for s in stacks), default=0)
         
         return {
             'players': lineup_players,
             'projection': total_proj,
             'salary': total_salary,
             'ownership': total_own,
-            'stacks': stacks,  # NEW v6.1.0
-            'correlation_score': correlation_score  # NEW v6.1.0
+            'stacks': stacks,
+            'correlation_score': correlation_score
         }
     
     def _calculate_composite_score(self, players: pd.DataFrame) -> pd.Series:
@@ -606,7 +1372,6 @@ class LineupOptimizer:
             'ceiling': self.config.get('ceiling_weight', 0.2)
         }
         
-        # Normalize each component
         score = pd.Series(0.0, index=players.index)
         
         for column, weight in weights.items():
@@ -615,7 +1380,6 @@ class LineupOptimizer:
                 if col_values.std() > 0:
                     normalized = (col_values - col_values.mean()) / col_values.std()
                     
-                    # Invert ownership (lower is better)
                     if column == 'ownership':
                         normalized = -normalized
                     
@@ -629,7 +1393,6 @@ class LineupOptimizer:
         generations = 50
         mutation_rate = 0.15
         
-        # Initialize population
         population = []
         for _ in range(population_size):
             lineup = self._build_single_lineup(set())
@@ -639,19 +1402,13 @@ class LineupOptimizer:
         if not population:
             return []
         
-        # Evolve population
         for gen in range(generations):
-            # Evaluate fitness
             for lineup in population:
                 lineup['fitness'] = self._calculate_fitness(lineup)
             
-            # Sort by fitness
             population.sort(key=lambda x: x.get('fitness', 0), reverse=True)
-            
-            # Keep top performers
             new_population = population[:population_size // 3]
             
-            # Create offspring through crossover and mutation
             while len(new_population) < population_size:
                 parent1 = self._tournament_select(population)
                 parent2 = self._tournament_select(population)
@@ -665,7 +1422,6 @@ class LineupOptimizer:
             
             population = new_population
         
-        # Return top unique lineups
         return self._get_diverse_lineups(population, num_lineups)
     
     def _calculate_fitness(self, lineup: Dict) -> float:
@@ -674,9 +1430,8 @@ class LineupOptimizer:
         own = lineup.get('ownership', 50)
         corr = lineup.get('correlation_score', 0)
         
-        # Normalize to 0-1 scale
-        proj_norm = proj / 200  # Assume 200 is excellent
-        own_norm = 1.0 - (own / 100)  # Lower ownership is better
+        proj_norm = proj / 200
+        own_norm = 1.0 - (own / 100)
         corr_norm = corr / 100
         
         weights = {
@@ -691,7 +1446,6 @@ class LineupOptimizer:
             corr_norm * weights['correlation']
         )
         
-        # Bonus for bring-back stacks in GPPs
         if self.config.get('enable_bring_back', False):
             stacks = lineup.get('stacks', [])
             if any(s.has_bring_back for s in stacks):
@@ -699,16 +1453,13 @@ class LineupOptimizer:
         
         return fitness
     
-    def _tournament_select(self, population: List[Dict], 
-                          tournament_size: int = 5) -> Dict:
+    def _tournament_select(self, population: List[Dict], tournament_size: int = 5) -> Dict:
         """Select parent using tournament selection."""
-        tournament = random.sample(population, 
-                                  min(tournament_size, len(population)))
+        tournament = random.sample(population, min(tournament_size, len(population)))
         return max(tournament, key=lambda x: x.get('fitness', 0))
     
     def _crossover(self, parent1: Dict, parent2: Dict) -> Optional[Dict]:
         """Create child lineup through crossover."""
-        # Take half from each parent
         child_players = []
         positions_filled = defaultdict(int)
         
@@ -725,13 +1476,11 @@ class LineupOptimizer:
                     child_players.append(player)
                     positions_filled[pos] += 1
         
-        # Fill remaining positions
         while sum(positions_filled.values()) < sum(self.positions.values()):
             available = self.player_pool[
                 ~self.player_pool['name'].isin([p['name'] for p in child_players])
             ]
             
-            # Find needed position
             for pos, count in self.positions.items():
                 if positions_filled[pos] < count:
                     pos_players = available[available['position'] == pos]
@@ -743,34 +1492,20 @@ class LineupOptimizer:
             else:
                 return None
         
-        # Check salary
         total_salary = sum(p['salary'] for p in child_players)
         if total_salary > self.salary_cap:
             return None
         
-        # Build lineup dict
-        return {
-            'players': child_players,
-            'projection': sum(p.get('projection', 0) for p in child_players),
-            'salary': total_salary,
-            'ownership': np.mean([p.get('ownership', 10) for p in child_players]),
-            'stacks': StackAnalyzer.identify_stacks(child_players),
-            'correlation_score': max(
-                (s.correlation_score for s in StackAnalyzer.identify_stacks(child_players)),
-                default=0
-            )
-        }
+        return self._recalculate_lineup_metrics(child_players)
     
     def _mutate(self, lineup: Dict) -> Optional[Dict]:
         """Mutate lineup by swapping one player."""
-        players = lineup['players'].copy()
+        players = deepcopy(lineup['players'])
         
-        # Select random player to replace
         swap_idx = random.randint(0, len(players) - 1)
         swap_player = players[swap_idx]
         swap_pos = swap_player['position']
         
-        # Find replacement
         available = self.player_pool[
             (self.player_pool['position'] == swap_pos) &
             (~self.player_pool['name'].isin([p['name'] for p in players]))
@@ -784,36 +1519,22 @@ class LineupOptimizer:
         
         if lineup['salary'] + salary_diff <= self.salary_cap:
             players[swap_idx] = new_player.to_dict()
-            
-            return {
-                'players': players,
-                'projection': sum(p.get('projection', 0) for p in players),
-                'salary': lineup['salary'] + salary_diff,
-                'ownership': np.mean([p.get('ownership', 10) for p in players]),
-                'stacks': StackAnalyzer.identify_stacks(players),
-                'correlation_score': max(
-                    (s.correlation_score for s in StackAnalyzer.identify_stacks(players)),
-                    default=0
-                )
-            }
+            return self._recalculate_lineup_metrics(players)
         
         return lineup
     
-    def _get_diverse_lineups(self, population: List[Dict], 
-                            num_lineups: int) -> List[Dict]:
+    def _get_diverse_lineups(self, population: List[Dict], num_lineups: int) -> List[Dict]:
         """Select diverse lineups from population."""
         if len(population) <= num_lineups:
             return population
         
-        selected = [population[0]]  # Best lineup
-        
+        selected = [population[0]]
         diversity_threshold = self.config.get('diversity_threshold', 4.0)
         
         for lineup in population[1:]:
             if len(selected) >= num_lineups:
                 break
             
-            # Check diversity from all selected lineups
             min_distance = min(
                 self._calculate_edit_distance(lineup, s)
                 for s in selected
@@ -822,7 +1543,6 @@ class LineupOptimizer:
             if min_distance >= diversity_threshold:
                 selected.append(lineup)
         
-        # Fill remaining with best available if needed
         while len(selected) < num_lineups and len(population) > len(selected):
             for lineup in population:
                 if lineup not in selected:
@@ -836,131 +1556,32 @@ class LineupOptimizer:
         players1 = set(p['name'] for p in lineup1['players'])
         players2 = set(p['name'] for p in lineup2['players'])
         return len(players1.symmetric_difference(players2))
-    
-    def _generate_monte_carlo(self, num_lineups: int) -> List[Dict]:
-        """Generate lineups using Monte Carlo simulation."""
-        iterations = min(10000, num_lineups * 100)
-        lineups = []
-        
-        for _ in range(iterations):
-            # Randomly sample from distributions
-            simulated_pool = self.player_pool.copy()
-            
-            # Add variance to projections
-            for idx in simulated_pool.index:
-                mean = simulated_pool.loc[idx, 'projection']
-                std = mean * 0.25  # 25% standard deviation
-                simulated_pool.loc[idx, 'projection'] = max(0, 
-                    np.random.normal(mean, std)
-                )
-            
-            # Build lineup with simulated values
-            lineup = self._build_single_lineup(set())
-            if lineup:
-                lineups.append(lineup)
-        
-        # Return top diverse lineups
-        lineups.sort(key=lambda x: x.get('projection', 0), reverse=True)
-        return self._get_diverse_lineups(lineups, num_lineups)
 
 
 # ============================================================================
-# STACKING REPORT GENERATOR - NEW IN v6.1.0
-# ============================================================================
-
-class StackingReport:
-    """Generate comprehensive stacking analysis reports."""
-    
-    @staticmethod
-    def generate_report(lineups: List[Dict]) -> Dict:
-        """
-        Generate comprehensive stacking report.
-        
-        Returns:
-            Dictionary with stacking statistics and recommendations
-        """
-        if not lineups:
-            return {}
-        
-        all_stacks = []
-        for lineup in lineups:
-            all_stacks.extend(lineup.get('stacks', []))
-        
-        if not all_stacks:
-            return {
-                'total_stacks': 0,
-                'message': 'No stacks identified in lineups'
-            }
-        
-        # Aggregate statistics
-        stack_types = defaultdict(int)
-        bring_back_count = 0
-        correlation_scores = []
-        
-        for stack in all_stacks:
-            stack_types[stack.stack_type] += 1
-            if stack.has_bring_back:
-                bring_back_count += 1
-            correlation_scores.append(stack.correlation_score)
-        
-        report = {
-            'total_stacks': len(all_stacks),
-            'unique_stack_types': len(stack_types),
-            'stack_type_breakdown': dict(stack_types),
-            'bring_back_percentage': (bring_back_count / len(all_stacks)) * 100,
-            'avg_correlation_score': np.mean(correlation_scores),
-            'max_correlation_score': max(correlation_scores),
-            'min_correlation_score': min(correlation_scores),
-            'top_stacks': sorted(
-                all_stacks,
-                key=lambda x: x.correlation_score,
-                reverse=True
-            )[:5]
-        }
-        
-        # Recommendations
-        recommendations = []
-        if report['avg_correlation_score'] < 50:
-            recommendations.append(
-                "⚠️ Low average correlation scores. Consider using more QB+WR stacks."
-            )
-        if report['bring_back_percentage'] < 30:
-            recommendations.append(
-                "💡 Consider adding bring-back plays for game stack leverage."
-            )
-        if 'QB+2WR' not in stack_types:
-            recommendations.append(
-                "💡 No QB+2WR stacks found. These are highly correlated in GPPs."
-            )
-        
-        report['recommendations'] = recommendations
-        
-        return report
-
-
-# ============================================================================
-# MAIN INTERFACE
+# MAIN INTERFACE - Enhanced v6.2.0
 # ============================================================================
 
 def optimize_lineups(
     player_pool: pd.DataFrame,
     num_lineups: int = 1,
     contest_preset: Optional[str] = None,
-    custom_config: Optional[Dict] = None
-) -> Tuple[List[Dict], Dict]:
+    custom_config: Optional[Dict] = None,
+    exposure_rules: Optional[List[Dict]] = None
+) -> Tuple[List[Dict], Dict, Dict]:
     """
-    Main function to optimize DFS lineups.
+    Main function to optimize DFS lineups (v6.2.0).
     
     Args:
         player_pool: DataFrame with player data
         num_lineups: Number of lineups to generate
-        contest_preset: Name of contest preset ('cash', 'gpp_large', etc.)
-        custom_config: Optional custom configuration (overrides preset)
+        contest_preset: Name of contest preset
+        custom_config: Optional custom configuration
+        exposure_rules: Optional list of exposure rule dicts
         
     Returns:
-        Tuple of (lineups, stacking_report)
+        Tuple of (lineups, stacking_report, exposure_report)
     """
-    # Build configuration
     config = {'salary_cap': 50000}
     
     if contest_preset:
@@ -972,23 +1593,32 @@ def optimize_lineups(
     if custom_config:
         config.update(custom_config)
     
-    # Initialize optimizer
     optimizer = LineupOptimizer(player_pool, config)
     
-    # Generate lineups
+    # v6.2.0: Add exposure rules
+    if exposure_rules:
+        for rule in exposure_rules:
+            optimizer.exposure_manager.add_rule(**rule)
+    
     lineups = optimizer.generate_lineups(num_lineups)
     
-    # Generate stacking report
-    report = StackingReport.generate_report(lineups)
+    stacking_report = StackingReport.generate_report(lineups)
+    
+    # v6.2.0: Generate exposure report
+    exposure_report = {
+        'compliance': optimizer.exposure_manager.check_exposure_compliance(lineups),
+        'exposure_table': optimizer.exposure_manager.get_exposure_report(lineups),
+        'underexposed': optimizer.exposure_manager.get_underexposed_players(lineups),
+        'suggestions': optimizer.exposure_manager.suggest_exposure_adjustments(lineups)
+    }
     
     logger.info(f"Generated {len(lineups)} lineups using "
                f"{'preset: ' + contest_preset if contest_preset else 'custom config'}")
     
-    return lineups, report
+    return lineups, stacking_report, exposure_report
 
 
 if __name__ == '__main__':
-    # Example usage
     sample_data = {
         'name': ['Player1', 'Player2', 'Player3'],
         'position': ['QB', 'WR', 'RB'],
@@ -999,10 +1629,10 @@ if __name__ == '__main__':
     }
     
     df = pd.DataFrame(sample_data)
-    lineups, report = optimize_lineups(df, contest_preset='gpp_large')
+    lineups, stacking_report, exposure_report = optimize_lineups(
+        df,
+        contest_preset='gpp_large'
+    )
     
     print(f"\nGenerated {len(lineups)} lineups")
-    print(f"\nStacking Report:")
-    for key, value in report.items():
-        if key != 'top_stacks':
-            print(f"  {key}: {value}")
+    print(f"Exposure compliance: {exposure_report['compliance']['compliant']}")
