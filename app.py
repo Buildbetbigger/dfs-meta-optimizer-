@@ -622,7 +622,7 @@ def main():
     
     # Load player data
     try:
-        player_pool = pd.read_csv(uploaded_file)
+        players_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
         players_df = fix_csv_columns(players_df)
         st.success(f" Loaded {len(player_pool)} players")
     except Exception as e:
