@@ -629,6 +629,14 @@ def main():
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
         return
+    # Add Showdown position eligibility
+    if 'CPT' not in players_df.columns:
+        players_df['CPT'] = 1  # All players eligible for Captain
+        players_df['FLEX'] = 1  # All players eligible for Flex
+
+    # Store original position
+    if 'original_position' not in players_df.columns:
+        players_df['original_position'] = players_df['position']
     
     # Validate columns
     required_cols = ['name', 'position', 'salary', 'team']
