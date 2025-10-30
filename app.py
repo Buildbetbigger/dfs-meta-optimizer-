@@ -63,7 +63,8 @@ try:
         StackingReport,
         LineupFilter,
         ExposureManager,
-        OwnershipTracker
+        OwnershipTracker,
+        LineupOptimizer
     )
     from opponent_modeling import (
         create_opponent_model,
@@ -89,7 +90,7 @@ except ImportError as e:
 
 st.set_page_config(
     page_title="DFS Meta-Optimizer v7.0.1",
-    page_icon="🎯",
+    page_icon="ðŸŽ¯",
     layout="wide"
 )
 
@@ -100,9 +101,9 @@ st.set_page_config(
 
 def render_exposure_rule_builder() -> List[Dict]:
     """Render exposure rule builder interface."""
-    st.markdown("### 🎚️ Exposure Rules")
+    st.markdown("### ðŸŽšï¸ Exposure Rules")
     
-    with st.expander("➕ Add Exposure Rule", expanded=False):
+    with st.expander("âž• Add Exposure Rule", expanded=False):
         rule_type_option = st.selectbox(
             "Rule Type",
             options=['Player-Specific', 'Position-Based', 'Team-Based'],
@@ -149,7 +150,7 @@ def render_exposure_rule_builder() -> List[Dict]:
                     st.session_state.exposure_rules = []
                 
                 st.session_state.exposure_rules.append(rule)
-                st.success(f"✅ Added {rule_enforcement.split()[0].lower()} rule for {rule_target}")
+                st.success(f"âœ… Added {rule_enforcement.split()[0].lower()} rule for {rule_target}")
                 st.rerun()
     
     # Display current rules
@@ -185,7 +186,7 @@ def render_exposure_rule_builder() -> List[Dict]:
 
 def render_exposure_report(exposure_report: Dict):
     """Render comprehensive exposure report dashboard."""
-    st.markdown("### 📊 Exposure Analysis")
+    st.markdown("### ðŸ“Š Exposure Analysis")
     
     compliance = exposure_report['compliance']
     
@@ -194,9 +195,9 @@ def render_exposure_report(exposure_report: Dict):
     
     with col1:
         if compliance['compliant']:
-            st.success("✅ **Exposure Compliant**")
+            st.success("âœ… **Exposure Compliant**")
         else:
-            st.error(f"❌ **{compliance['total_violations']} Violations**")
+            st.error(f"âŒ **{compliance['total_violations']} Violations**")
     
     with col2:
         st.metric("Violations", compliance['total_violations'])
@@ -212,13 +213,13 @@ def render_exposure_report(exposure_report: Dict):
         
         # Style the dataframe
         def color_compliance(val):
-            if val == '✓':
+            if val == 'âœ“':
                 return 'background-color: #90EE90'
-            elif val == '✗':
+            elif val == 'âœ—':
                 return 'background-color: #FFB6C1'
             return ''
         
-        styled_df = exposure_table.style.applymap(
+        styled_df = exposure_table.style.map(
             color_compliance,
             subset=['Compliant']
         )
@@ -227,7 +228,7 @@ def render_exposure_report(exposure_report: Dict):
     
     # Violations detail
     if compliance['violations']:
-        st.markdown("#### ⚠️ Exposure Violations")
+        st.markdown("#### âš ï¸ Exposure Violations")
         
         for violation in compliance['violations'][:5]:  # Top 5
             st.warning(
@@ -239,16 +240,16 @@ def render_exposure_report(exposure_report: Dict):
     suggestions = exposure_report.get('suggestions', [])
     
     if suggestions:
-        st.markdown("#### 💡 Recommended Actions")
+        st.markdown("#### ðŸ’¡ Recommended Actions")
         
         for suggestion in suggestions[:3]:  # Top 3
-            st.info(f"🔧 {suggestion['action']}")
+            st.info(f"ðŸ”§ {suggestion['action']}")
     
     # Underexposed players
     underexposed = exposure_report.get('underexposed', [])
     
     if underexposed and len(underexposed) > 0:
-        with st.expander(f"📉 Underexposed Players ({len(underexposed)})"):
+        with st.expander(f"ðŸ“‰ Underexposed Players ({len(underexposed)})"):
             st.write(", ".join(underexposed[:20]))
 
 
@@ -258,7 +259,7 @@ def render_exposure_report(exposure_report: Dict):
 
 def render_tiered_portfolio_option() -> Optional[Dict[str, float]]:
     """Render tiered portfolio configuration."""
-    st.markdown("### 🎯 Portfolio Strategy")
+    st.markdown("### ðŸŽ¯ Portfolio Strategy")
     
     use_tiered = st.checkbox(
         "Use Tiered Portfolio",
@@ -304,7 +305,7 @@ def render_tiered_portfolio_option() -> Optional[Dict[str, float]]:
         total = safe_pct + balanced_pct + contrarian_pct
         
         if total != 100:
-            st.warning(f"⚠️ Total must equal 100% (currently {total}%)")
+            st.warning(f"âš ï¸ Total must equal 100% (currently {total}%)")
             return None
         
         return {
@@ -322,7 +323,7 @@ def render_tiered_portfolio_option() -> Optional[Dict[str, float]]:
 
 def render_filtering_options() -> Dict:
     """Render portfolio filtering options."""
-    st.markdown("### 🔧 Filtering Options")
+    st.markdown("### ðŸ”§ Filtering Options")
     
     with st.expander("Configure Filters", expanded=False):
         col1, col2 = st.columns(2)
@@ -373,19 +374,19 @@ def render_filtering_options() -> Dict:
 
 def render_preset_selector() -> Optional[str]:
     """Render contest preset dropdown."""
-    st.markdown("### 🎯 Contest Type")
+    st.markdown("### ðŸŽ¯ Contest Type")
     
     preset_options = ['Custom'] + list(CONTEST_PRESETS.keys())
     preset_labels = {
         'Custom': 'Custom Configuration',
-        'cash': '💰 Cash Game (50/50s, Double-Ups)',
-        'gpp_small': '🏆 Small GPP (100-1K entries)',
-        'gpp_large': '🚀 Large GPP (10K+ entries)',
-        'gpp_massive': '💎 Massive GPP (Milly Maker)',
-        'contrarian': '🎲 Contrarian (Fade Chalk)',
-        'balanced': '⚖️ Balanced',
-        'showdown': '⚡ Showdown (Captain Mode)',
-        'turbo': '⏱️ Turbo (Quick Build)'
+        'cash': 'ðŸ’° Cash Game (50/50s, Double-Ups)',
+        'gpp_small': 'ðŸ† Small GPP (100-1K entries)',
+        'gpp_large': 'ðŸš€ Large GPP (10K+ entries)',
+        'gpp_massive': 'ðŸ’Ž Massive GPP (Milly Maker)',
+        'contrarian': 'ðŸŽ² Contrarian (Fade Chalk)',
+        'balanced': 'âš–ï¸ Balanced',
+        'showdown': 'âš¡ Showdown (Captain Mode)',
+        'turbo': 'â±ï¸ Turbo (Quick Build)'
     }
     
     selected = st.selectbox(
@@ -398,7 +399,7 @@ def render_preset_selector() -> Optional[str]:
     if selected != 'Custom':
         preset = CONTEST_PRESETS[selected]
         
-        with st.expander("📋 Preset Configuration", expanded=False):
+        with st.expander("ðŸ“‹ Preset Configuration", expanded=False):
             col1, col2 = st.columns(2)
             
             with col1:
@@ -423,7 +424,7 @@ def render_preset_selector() -> Optional[str]:
 
 def render_similarity_matrix(lineups: List[Dict]):
     """Render lineup similarity matrix."""
-    st.markdown("### 🔗 Lineup Similarity Matrix")
+    st.markdown("### ðŸ”— Lineup Similarity Matrix")
     
     lineup_filter = LineupFilter(pd.DataFrame())
     similarity_df = lineup_filter.get_lineup_similarity_matrix(lineups)
@@ -439,10 +440,10 @@ def render_similarity_matrix(lineups: List[Dict]):
         else:
             return 'background-color: #90EE90'  # Low similarity (good)
     
-    styled_df = similarity_df.style.applymap(color_similarity).format("{:.0f}")
+    styled_df = similarity_df.style.map(color_similarity).format("{:.0f}")
     
     st.dataframe(styled_df, use_container_width=True)
-    st.caption("🟥 High Similarity (>75%)  🟨 Medium (50-75%)  🟩 Low (<50%)")
+    st.caption("ðŸŸ¥ High Similarity (>75%)  ðŸŸ¨ Medium (50-75%)  ðŸŸ© Low (<50%)")
 
 
 # ============================================================================
@@ -482,9 +483,9 @@ def render_enhanced_lineup(lineup: Dict, index: int):
         
         stacks = lineup.get('stacks', [])
         if stacks:
-            st.markdown("**🔗 Identified Stacks:**")
+            st.markdown("**ðŸ”— Identified Stacks:**")
             for stack in stacks:
-                stack_info = f"• {stack.stack_type}: {', '.join(stack.players[:3])}"
+                stack_info = f"â€¢ {stack.stack_type}: {', '.join(stack.players[:3])}"
                 if len(stack.players) > 3:
                     stack_info += f" (+{len(stack.players)-3} more)"
                 
@@ -504,7 +505,7 @@ def render_stacking_report(report: Dict):
         st.info("No stacks identified")
         return
     
-    st.markdown("### 📊 Stacking Analysis")
+    st.markdown("### ðŸ“Š Stacking Analysis")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -535,16 +536,16 @@ def render_stacking_report(report: Dict):
 def main():
     """Main application entry point."""
     
-    st.title("🎯 DFS Meta-Optimizer v6.3.0")
+    st.title("ðŸŽ¯ DFS Meta-Optimizer v6.3.0")
     st.markdown("**Advanced NFL DFS Portfolio Optimization with Real-Time Data Integration**")
     st.markdown("---")
     
     # Sidebar - Configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("âš™ï¸ Configuration")
         
         # File upload
-        st.subheader("📁 Player Data")
+        st.subheader("ðŸ“ Player Data")
         uploaded_file = st.file_uploader(
             "Upload Player Pool CSV",
             type=['csv'],
@@ -556,7 +557,7 @@ def main():
         
         # Custom settings if not using preset
         if not preset_name:
-            st.subheader("🎛️ Custom Settings")
+            st.subheader("ðŸŽ›ï¸ Custom Settings")
             
             num_lineups = st.number_input(
                 "Number of Lineups",
@@ -588,7 +589,7 @@ def main():
         filter_options = render_filtering_options()
         
         # AI Assistant
-        st.subheader("🤖 AI Assistant")
+        st.subheader("ðŸ¤– AI Assistant")
         use_ai = st.checkbox("Enable AI Ownership Prediction", value=False)
         
         if use_ai:
@@ -596,9 +597,9 @@ def main():
     
     # Main content
     if not uploaded_file:
-        st.info("👈 Upload a player pool CSV to begin optimization")
+        st.info("ðŸ‘ˆ Upload a player pool CSV to begin optimization")
         
-        with st.expander("📋 Example CSV Format"):
+        with st.expander("ðŸ“‹ Example CSV Format"):
             example_df = pd.DataFrame({
                 'name': ['Patrick Mahomes', 'Tyreek Hill', 'Travis Kelce'],
                 'position': ['QB', 'WR', 'TE'],
@@ -614,7 +615,7 @@ def main():
     # Load player data
     try:
         player_pool = pd.read_csv(uploaded_file)
-        st.success(f"✅ Loaded {len(player_pool)} players")
+        st.success(f"âœ… Loaded {len(player_pool)} players")
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
         return
@@ -627,7 +628,7 @@ def main():
         st.error(f"Missing required columns: {', '.join(missing_cols)}")
         return
     
-    with st.expander("👀 Player Pool Preview"):
+    with st.expander("ðŸ‘€ Player Pool Preview"):
         st.dataframe(player_pool.head(10), use_container_width=True)
     
     # ============================================================================
@@ -635,19 +636,19 @@ def main():
     # ============================================================================
     
     st.markdown("---")
-    st.header("📡 Real-Time Data Integration (v7.0.1)")
+    st.header("ðŸ“¡ Real-Time Data Integration (v7.0.1)")
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📰 News Monitor", 
-        "🎲 Vegas Lines", 
-        "👥 Ownership Prediction",
-        "🌦️ Weather Data",  # NEW v7.0.1
-        "🏥 Injury Status"   # NEW v7.0.1
+        "ðŸ“° News Monitor", 
+        "ðŸŽ² Vegas Lines", 
+        "ðŸ‘¥ Ownership Prediction",
+        "ðŸŒ¦ï¸ Weather Data",  # NEW v7.0.1
+        "ðŸ¥ Injury Status"   # NEW v7.0.1
     ])
     
     # Tab 1: News Monitor
     with tab1:
-        st.markdown("### 📰 News Feed Monitor")
+        st.markdown("### ðŸ“° News Feed Monitor")
         
         # Initialize news monitor
         if 'news_monitor' not in st.session_state:
@@ -656,7 +657,7 @@ def main():
         news_monitor = st.session_state.news_monitor
         
         # Add news item
-        with st.expander("➕ Add News Item"):
+        with st.expander("âž• Add News Item"):
             news_player = st.selectbox("Player", player_pool['name'].tolist(), key="news_player")
             news_headline = st.text_input("Headline", key="news_headline")
             news_content = st.text_area("Content", key="news_content")
@@ -671,24 +672,24 @@ def main():
                         source=news_source
                     )
                     if item:
-                        st.success(f"✅ Added {item.category} news (impact: {item.impact_score:.0f}/100)")
+                        st.success(f"âœ… Added {item.category} news (impact: {item.impact_score:.0f}/100)")
         
         # Display critical alerts
         critical_news = news_monitor.get_critical_alerts()
         if critical_news:
-            st.markdown("#### 🚨 Critical Alerts")
+            st.markdown("#### ðŸš¨ Critical Alerts")
             for item in critical_news[:5]:
                 st.error(f"**{item.player_name}**: {item.headline} (Impact: {item.impact_score:.0f}/100)")
         
         # Display injury report
         injury_report = news_monitor.get_injury_report()
         if not injury_report.empty:
-            st.markdown("#### 🏥 Injury Report")
+            st.markdown("#### ðŸ¥ Injury Report")
             st.dataframe(injury_report, use_container_width=True)
     
     # Tab 2: Vegas Lines
     with tab2:
-        st.markdown("### 🎲 Vegas Lines Tracker")
+        st.markdown("### ðŸŽ² Vegas Lines Tracker")
         
         # Initialize Vegas tracker
         if 'vegas_tracker' not in st.session_state:
@@ -697,7 +698,7 @@ def main():
         vegas_tracker = st.session_state.vegas_tracker
         
         # Add game line
-        with st.expander("➕ Add Game Line"):
+        with st.expander("âž• Add Game Line"):
             col1, col2 = st.columns(2)
             with col1:
                 line_game_id = st.text_input("Game ID (e.g., KC@BUF)", key="line_game_id")
@@ -716,11 +717,11 @@ def main():
                         spread=line_spread,
                         total=line_total
                     )
-                    st.success(f"✅ Added line for {line_game_id}")
+                    st.success(f"âœ… Added line for {line_game_id}")
         
         # Display current lines
         if vegas_tracker.current_lines:
-            st.markdown("#### 📊 Current Lines & Implied Totals")
+            st.markdown("#### ðŸ“Š Current Lines & Implied Totals")
             
             implied_totals = vegas_tracker.get_all_implied_totals()
             
@@ -743,13 +744,13 @@ def main():
             # Sharp money indicators
             sharp_indicators = vegas_tracker.get_sharp_money_indicators()
             if sharp_indicators:
-                st.markdown("#### 💰 Sharp Money Indicators")
+                st.markdown("#### ðŸ’° Sharp Money Indicators")
                 for indicator in sharp_indicators:
                     st.info(f"**{indicator['game_id']}**: {indicator['indicator']} ({indicator['movement']:+.1f})")
     
     # Tab 3: Ownership Prediction
     with tab3:
-        st.markdown("### 👥 Ownership Prediction")
+        st.markdown("### ðŸ‘¥ Ownership Prediction")
         
         # Initialize ownership tracker
         if 'ownership_tracker' not in st.session_state:
@@ -764,7 +765,7 @@ def main():
         with col2:
             pred_chalk_threshold = st.number_input("Chalk Threshold %", value=25.0, step=5.0, key="chalk_threshold")
         
-        if st.button("🔮 Predict Ownership"):
+        if st.button("ðŸ”® Predict Ownership"):
             with st.spinner("Predicting ownership for all players..."):
                 # Get implied totals from Vegas tracker
                 implied_totals = {}
@@ -789,7 +790,7 @@ def main():
                 # Update player pool with predictions
                 player_pool['ownership'] = updated_pool['ownership']
                 
-                st.success("✅ Ownership predictions complete!")
+                st.success("âœ… Ownership predictions complete!")
                 
                 # Show distribution
                 dist = ownership_tracker.get_ownership_distribution()
@@ -807,19 +808,19 @@ def main():
                 # Chalk plays
                 chalk_plays = ownership_tracker.identify_chalk_plays(pred_chalk_threshold)
                 if chalk_plays:
-                    st.markdown("#### 🔥 Chalk Plays")
+                    st.markdown("#### ðŸ”¥ Chalk Plays")
                     chalk_df = pd.DataFrame(chalk_plays[:10])
                     st.dataframe(chalk_df, use_container_width=True)
                 
                 # Leverage plays
                 leverage_plays = ownership_tracker.identify_leverage_plays(player_pool, 15.0)
                 if not leverage_plays.empty:
-                    st.markdown("#### 💎 Leverage Plays")
+                    st.markdown("#### ðŸ’Ž Leverage Plays")
                     st.dataframe(leverage_plays, use_container_width=True)
     
     # Tab 4: Weather Data (NEW v7.0.1)
     with tab4:
-        st.markdown("### 🌦️ Weather Impact Analysis")
+        st.markdown("### ðŸŒ¦ï¸ Weather Impact Analysis")
         
         # Initialize weather provider
         if 'weather_provider' not in st.session_state:
@@ -832,7 +833,7 @@ def main():
         
         weather_provider = st.session_state.weather_provider
         
-        if st.button("🔄 Fetch Weather Data"):
+        if st.button("ðŸ”„ Fetch Weather Data"):
             with st.spinner("Fetching weather for all games..."):
                 # Add weather data to player pool
                 enriched_pool = weather_provider.add_weather_to_players(player_pool)
@@ -840,7 +841,7 @@ def main():
                 # Update player pool
                 player_pool = enriched_pool
                 
-                st.success("✅ Weather data added!")
+                st.success("âœ… Weather data added!")
                 
                 # Show weather report
                 weather_report = weather_provider.get_weather_report(enriched_pool)
@@ -854,22 +855,22 @@ def main():
                 ]
                 
                 if not bad_weather.empty:
-                    st.markdown("#### ⚠️ Players Affected by Bad Weather")
+                    st.markdown("#### âš ï¸ Players Affected by Bad Weather")
                     weather_df = bad_weather[[
                         'name', 'position', 'team', 'weather_temp', 
                         'weather_wind', 'weather_conditions', 'weather_impact'
                     ]].copy()
-                    weather_df.columns = ['Player', 'Pos', 'Team', 'Temp (°F)', 'Wind (mph)', 'Conditions', 'Impact (%)']
+                    weather_df.columns = ['Player', 'Pos', 'Team', 'Temp (Â°F)', 'Wind (mph)', 'Conditions', 'Impact (%)']
                     st.dataframe(weather_df, use_container_width=True)
                 else:
-                    st.info("✅ No bad weather detected - all games have good conditions")
+                    st.info("âœ… No bad weather detected - all games have good conditions")
         
         # Manual weather override
-        with st.expander("⚙️ Manual Weather Override"):
+        with st.expander("âš™ï¸ Manual Weather Override"):
             st.markdown("Override weather for specific games/teams")
             
             weather_team = st.selectbox("Team", player_pool['team'].unique().tolist(), key="weather_team")
-            weather_temp = st.number_input("Temperature (°F)", value=65, step=1)
+            weather_temp = st.number_input("Temperature (Â°F)", value=65, step=1)
             weather_wind = st.number_input("Wind Speed (mph)", value=5, step=1)
             weather_conditions = st.selectbox("Conditions", ['Clear', 'Cloudy', 'Rain', 'Snow', 'Thunderstorm'])
             
@@ -893,11 +894,11 @@ def main():
                     if pos_mask.any():
                         player_pool.loc[pos_mask, 'weather_impact'] = impact.get(pos, 100)
                 
-                st.success(f"✅ Applied weather override to {weather_team}")
+                st.success(f"âœ… Applied weather override to {weather_team}")
     
     # Tab 5: Injury Status (NEW v7.0.1)
     with tab5:
-        st.markdown("### 🏥 Injury Status Tracker")
+        st.markdown("### ðŸ¥ Injury Status Tracker")
         
         # Initialize injury tracker
         if 'injury_tracker' not in st.session_state:
@@ -918,7 +919,7 @@ def main():
         with col2:
             filter_injured = st.checkbox("Filter OUT/DOUBTFUL", value=True)
         
-        if st.button("🔄 Fetch Injury Report"):
+        if st.button("ðŸ”„ Fetch Injury Report"):
             with st.spinner(f"Scraping injury data from {injury_source}..."):
                 # Scrape injuries
                 injury_report = injury_tracker.scrape_injury_report(injury_source)
@@ -938,9 +939,9 @@ def main():
                     original_count = len(player_pool)
                     if filter_injured:
                         player_pool = injury_tracker.filter_healthy_players(player_pool)
-                        st.info(f"ℹ️ Filtered {original_count - len(player_pool)} injured players")
+                        st.info(f"â„¹ï¸ Filtered {original_count - len(player_pool)} injured players")
                     
-                    st.success(f"✅ Injury data added from {injury_source}")
+                    st.success(f"âœ… Injury data added from {injury_source}")
                     
                     # Show injury report
                     injury_text = injury_tracker.get_injury_report(player_pool)
@@ -949,7 +950,7 @@ def main():
                     # Show injury details
                     injured = player_pool[player_pool['injury_status'] != 'HEALTHY']
                     if not injured.empty:
-                        st.markdown("#### 🚨 Injured Players")
+                        st.markdown("#### ðŸš¨ Injured Players")
                         injury_df = injured[[
                             'name', 'position', 'team', 'injury_status', 
                             'injury_type', 'injury_impact', 'projection'
@@ -958,10 +959,10 @@ def main():
                         injury_df['Impact'] = injury_df['Impact'].apply(lambda x: f"{x:.0%}")
                         st.dataframe(injury_df, use_container_width=True)
                 else:
-                    st.warning(f"⚠️ No injury data available from {injury_source}")
+                    st.warning(f"âš ï¸ No injury data available from {injury_source}")
         
         # Manual injury entry
-        with st.expander("➕ Manual Injury Entry"):
+        with st.expander("âž• Manual Injury Entry"):
             st.markdown("Manually add or update injury status")
             
             injury_player = st.selectbox("Player", player_pool['name'].tolist(), key="injury_player")
@@ -982,27 +983,27 @@ def main():
                     original_proj = player_pool.loc[player_mask, 'projection'].values[0]
                     new_proj = original_proj * impact_map.get(injury_status, 1.0)
                     player_pool.loc[player_mask, 'projection'] = new_proj
-                    st.info(f"📉 Adjusted projection: {original_proj:.1f} → {new_proj:.1f}")
+                    st.info(f"ðŸ“‰ Adjusted projection: {original_proj:.1f} â†’ {new_proj:.1f}")
                 
-                st.success(f"✅ Updated {injury_player} status to {injury_status}")
+                st.success(f"âœ… Updated {injury_player} status to {injury_status}")
     
     # AI Ownership Prediction (Legacy)
     if use_ai and 'api_key' in locals() and api_key:
-        with st.spinner("🤖 AI analyzing ownership trends..."):
+        with st.spinner("ðŸ¤– AI analyzing ownership trends..."):
             try:
                 assistant = ClaudeAssistant(api_key)
                 predictions = assistant.predict_ownership(player_pool)
                 
                 if predictions:
                     player_pool['ownership'] = player_pool['name'].map(predictions)
-                    st.success("✅ AI ownership predictions applied")
+                    st.success("âœ… AI ownership predictions applied")
             except Exception as e:
                 st.warning(f"AI prediction failed: {e}")
     
     # Optimization button
     st.markdown("---")
     
-    if st.button("🚀 Generate Lineups", type="primary", use_container_width=True):
+    if st.button("ðŸš€ Generate Lineups", type="primary", use_container_width=True):
         
         with st.spinner(f"Optimizing {num_lineups} lineups..."):
             
@@ -1036,7 +1037,7 @@ def main():
                     st.error("No valid lineups generated")
                     return
                 
-                st.success(f"✅ Generated {len(lineups)} optimal lineups!")
+                st.success(f"âœ… Generated {len(lineups)} optimal lineups!")
                 
                 # Apply filters
                 if filter_options['remove_duplicates']:
@@ -1060,7 +1061,7 @@ def main():
                     )
                 
                 st.markdown("---")
-                st.header("📊 Results")
+                st.header("ðŸ“Š Results")
                 
                 # Summary metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -1097,7 +1098,7 @@ def main():
                 # v6.2.0: Find unique lineups
                 if st.checkbox("Show Most Unique Lineups", value=False):
                     st.markdown("---")
-                    st.markdown("### 🎲 Most Contrarian Lineups")
+                    st.markdown("### ðŸŽ² Most Contrarian Lineups")
                     
                     lineup_filter = LineupFilter(player_pool)
                     unique_lineups = lineup_filter.find_most_unique_lineups(lineups, n=min(10, len(lineups)))
@@ -1110,7 +1111,7 @@ def main():
                 
                 # Individual lineups
                 st.markdown("---")
-                st.header("📋 Generated Lineups")
+                st.header("ðŸ“‹ Generated Lineups")
                 
                 if len(lineups) <= 5:
                     for i, lineup in enumerate(lineups):
@@ -1125,7 +1126,7 @@ def main():
                 
                 # Export
                 st.markdown("---")
-                st.subheader("💾 Export")
+                st.subheader("ðŸ’¾ Export")
                 
                 export_data = []
                 for i, lineup in enumerate(lineups):
@@ -1144,7 +1145,7 @@ def main():
                 csv = export_df.to_csv(index=False)
                 
                 st.download_button(
-                    label="📥 Download Lineups CSV",
+                    label="ðŸ“¥ Download Lineups CSV",
                     data=csv,
                     file_name="dfs_lineups_v7.0.0.csv",
                     mime="text/csv",
@@ -1156,12 +1157,12 @@ def main():
                 # ============================================================
                 
                 st.markdown("---")
-                st.header("🚀 Advanced Analytics (v7.0.0)")
+                st.header("ðŸš€ Advanced Analytics (v7.0.0)")
                 
                 # Create tabs for advanced features
                 analytics_tabs = st.tabs([
-                    "📊 Advanced Analytics",
-                    "🎲 Contest Simulation"
+                    "ðŸ“Š Advanced Analytics",
+                    "ðŸŽ² Contest Simulation"
                 ])
                 
                 with analytics_tabs[0]:
@@ -1185,7 +1186,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
     Render advanced analytics dashboard with 8D evaluation,
     variance analysis, and leverage scoring.
     """
-    st.markdown("### 📊 Advanced Analytics Dashboard")
+    st.markdown("### ðŸ“Š Advanced Analytics Dashboard")
     st.markdown("*PhD-Level lineup analysis with 8-dimensional evaluation*")
     
     if not lineups:
@@ -1208,7 +1209,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
     
     # 8-Dimensional Evaluation
     st.markdown("---")
-    st.markdown("### 🎯 8-Dimensional Evaluation")
+    st.markdown("### ðŸŽ¯ 8-Dimensional Evaluation")
     
     eval_8d = optimizer.evaluate_lineup_8d(selected_lineup)
     
@@ -1259,27 +1260,27 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
     composite = eval_8d['composite_score']
     
     if composite >= 80:
-        quality = "🏆 Elite"
+        quality = "ðŸ† Elite"
         color = "green"
     elif composite >= 70:
-        quality = "⭐ Excellent"
+        quality = "â­ Excellent"
         color = "blue"
     elif composite >= 60:
-        quality = "✓ Good"
+        quality = "âœ“ Good"
         color = "orange"
     else:
-        quality = "⚠️ Needs Work"
+        quality = "âš ï¸ Needs Work"
         color = "red"
     
     st.markdown(f"### Composite Score: **:{color}[{composite:.1f}/100]** - {quality}")
     
     # Variance Analysis
     st.markdown("---")
-    st.markdown("### 📈 Monte Carlo Variance Analysis")
+    st.markdown("### ðŸ“ˆ Monte Carlo Variance Analysis")
     
     num_sims = st.slider("Number of Simulations", 100, 10000, 1000, 100)
     
-    if st.button("🎲 Run Variance Analysis", type="primary"):
+    if st.button("ðŸŽ² Run Variance Analysis", type="primary"):
         with st.spinner("Running Monte Carlo simulation..."):
             variance_data = optimizer.analyze_lineup_variance(selected_lineup, num_sims)
         
@@ -1296,9 +1297,9 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
             st.metric("90th Percentile", f"{variance_data['percentile_90']:.1f}")
         
         with col3:
-            st.metric("💥 Boom Prob", f"{variance_data['boom_probability']:.1f}%")
-            st.metric("💣 Bust Prob", f"{variance_data['bust_probability']:.1f}%")
-            st.metric("🏆 Win Prob Est", f"{variance_data['win_probability_estimate']:.1f}%")
+            st.metric("ðŸ’¥ Boom Prob", f"{variance_data['boom_probability']:.1f}%")
+            st.metric("ðŸ’£ Bust Prob", f"{variance_data['bust_probability']:.1f}%")
+            st.metric("ðŸ† Win Prob Est", f"{variance_data['win_probability_estimate']:.1f}%")
         
         # Distribution visualization
         st.markdown("#### Score Distribution")
@@ -1320,7 +1321,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
     
     # Leverage Analysis
     st.markdown("---")
-    st.markdown("### 💎 Leverage Analysis")
+    st.markdown("### ðŸ’Ž Leverage Analysis")
     
     leverage_score = optimizer.calculate_lineup_leverage(selected_lineup)
     
@@ -1330,11 +1331,11 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
         st.metric("Leverage Score", f"{leverage_score:.1f}/100")
         
         if leverage_score >= 70:
-            st.success("🎯 **Highly Contrarian** - Great GPP potential")
+            st.success("ðŸŽ¯ **Highly Contrarian** - Great GPP potential")
         elif leverage_score >= 50:
-            st.info("✓ **Moderate Leverage** - Balanced approach")
+            st.info("âœ“ **Moderate Leverage** - Balanced approach")
         else:
-            st.warning("⚠️ **Chalky** - High ownership exposure")
+            st.warning("âš ï¸ **Chalky** - High ownership exposure")
     
     with col2:
         avg_own = np.mean([p.get('ownership', 50) for p in selected_lineup['players']])
@@ -1350,7 +1351,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
     # Portfolio-Level Analytics
     if len(lineups) > 1:
         st.markdown("---")
-        st.markdown("### 📊 Portfolio-Level Analytics")
+        st.markdown("### ðŸ“Š Portfolio-Level Analytics")
         
         portfolio_metrics = optimizer.calculate_portfolio_metrics(lineups)
         
@@ -1379,13 +1380,13 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_pool: pd.DataFrame
             st.markdown("**Most Exposed Players**")
             most_exp = portfolio_metrics['most_exposed_players'][:5]
             for player, exp in most_exp:
-                st.write(f"• {player}: {exp:.1f}%")
+                st.write(f"â€¢ {player}: {exp:.1f}%")
         
         with col2:
             st.markdown("**Least Exposed Players**")
             least_exp = portfolio_metrics['least_exposed_players'][:5]
             for player, exp in least_exp:
-                st.write(f"• {player}: {exp:.1f}%")
+                st.write(f"â€¢ {player}: {exp:.1f}%")
 
 
 def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame):
@@ -1393,7 +1394,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
     Render contest simulation dashboard for estimating
     win probability and optimal lineup selection.
     """
-    st.markdown("### 🎲 Contest Outcome Simulation")
+    st.markdown("### ðŸŽ² Contest Outcome Simulation")
     st.markdown("*Monte Carlo simulation of actual contest results*")
     
     if not lineups:
@@ -1428,7 +1429,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
             help="Number of entries in the contest"
         )
     
-    if st.button("🚀 Run Contest Simulation", type="primary", use_container_width=True):
+    if st.button("ðŸš€ Run Contest Simulation", type="primary", use_container_width=True):
         
         optimizer = LineupOptimizer(player_pool, {'salary_cap': 50000})
         
@@ -1439,11 +1440,11 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
                 contest_size=contest_size
             )
         
-        st.success(f"✅ Simulation complete! Analyzed {len(lineups)} lineups")
+        st.success(f"âœ… Simulation complete! Analyzed {len(lineups)} lineups")
         
         # Results
         st.markdown("---")
-        st.markdown("### 📊 Simulation Results")
+        st.markdown("### ðŸ“Š Simulation Results")
         
         # Key findings
         best_lineup = sim_results['best_lineup_idx']
@@ -1452,7 +1453,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("#### 🏆 Highest Win Probability")
+            st.markdown("#### ðŸ† Highest Win Probability")
             st.markdown(f"**Lineup #{best_lineup + 1}**")
             win_prob = sim_results['win_probabilities'].get(best_lineup, 0)
             st.metric("Win Probability", f"{win_prob:.2f}%")
@@ -1463,7 +1464,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
             st.write(f"Ownership: {best_lineup_data.get('ownership', 0):.1f}%")
         
         with col2:
-            st.markdown("#### 💰 Safest (Highest Cash %)  ")
+            st.markdown("#### ðŸ’° Safest (Highest Cash %)  ")
             st.markdown(f"**Lineup #{safest_lineup + 1}**")
             cash_prob = sim_results['cash_probabilities'].get(safest_lineup, 0)
             st.metric("Cash Probability", f"{cash_prob:.2f}%")
@@ -1475,7 +1476,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
         
         # Detailed table
         st.markdown("---")
-        st.markdown("### 📋 All Lineups - Probability Breakdown")
+        st.markdown("### ðŸ“‹ All Lineups - Probability Breakdown")
         
         results_data = []
         for i in range(len(lineups)):
@@ -1493,7 +1494,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_pool: pd.DataFrame
         
         # Insights
         st.markdown("---")
-        st.markdown("### 💡 Insights")
+        st.markdown("### ðŸ’¡ Insights")
         
         # Calculate some insights
         total_win_prob = sum(sim_results['win_probabilities'].values())
