@@ -54,6 +54,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+def fix_csv_columns(df):
+    """Auto-fix CSV columns"""
+    if 'first_name' in df.columns and 'last_name' in df.columns:
+        df['name'] = df['first_name'] + ' ' + df['last_name']
+        df = df.drop(columns=['first_name', 'last_name'])
+    return df
+
 try:
     from optimization_engine import (
         optimize_lineups,
@@ -615,6 +622,7 @@ def main():
     # Load player data
     try:
         player_pool = pd.read_csv(uploaded_file)
+        players_df = fix_csv_columns(players_df)
         st.success(f" Loaded {len(player_pool)} players")
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
