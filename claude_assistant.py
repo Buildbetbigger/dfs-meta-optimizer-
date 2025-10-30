@@ -1,8 +1,8 @@
 """
 Advanced AI Assistant Module
-Version 6.0.0 - MOST ADVANCED STATE
+Version 6.1.0 - STREAMLIT SECRETS INTEGRATION
 
-Enterprise-grade Claude API integration:
+Enterprise-grade Claude API integration with Streamlit secrets support:
 - Exponential backoff retry logic
 - Prompt caching (90% cost reduction)
 - Response caching (15-minute TTL)
@@ -13,6 +13,7 @@ Enterprise-grade Claude API integration:
 - Multi-model fallback support
 - Comprehensive cost tracking
 - Request/response logging
+- **NEW: Streamlit secrets integration**
 """
 
 import json
@@ -33,6 +34,12 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     print("⚠️ anthropic package not installed. Install with: pip install anthropic")
+
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +126,57 @@ def retry_with_exponential_backoff(
     return decorator
 
 # ==============================================================================
+# API KEY MANAGEMENT
+# ==============================================================================
+
+def get_api_key(api_key: Optional[str] = None) -> str:
+    """
+    Get API key from multiple sources (in priority order):
+    1. Directly passed api_key parameter
+    2. Streamlit secrets (st.secrets.anthropic.api_key)
+    3. Environment variable (ANTHROPIC_API_KEY)
+    
+    Args:
+        api_key: Optional API key passed directly
+        
+    Returns:
+        API key string
+        
+    Raises:
+        ValueError: If no API key found
+    """
+    # Priority 1: Directly passed
+    if api_key:
+        return api_key
+    
+    # Priority 2: Streamlit secrets
+    if STREAMLIT_AVAILABLE:
+        try:
+            # Try nested structure first: st.secrets.anthropic.api_key
+            if "anthropic" in st.secrets and "api_key" in st.secrets.anthropic:
+                return st.secrets.anthropic.api_key
+            # Try flat structure: st.secrets.ANTHROPIC_API_KEY
+            elif "ANTHROPIC_API_KEY" in st.secrets:
+                return st.secrets.ANTHROPIC_API_KEY
+        except (FileNotFoundError, KeyError):
+            pass
+    
+    # Priority 3: Environment variable
+    import os
+    env_key = os.environ.get("ANTHROPIC_API_KEY")
+    if env_key:
+        return env_key
+    
+    raise ValueError(
+        "No API key found. Please provide it via:\n"
+        "1. Pass api_key parameter directly\n"
+        "2. Add to .streamlit/secrets.toml:\n"
+        "   [anthropic]\n"
+        "   api_key = \"sk-ant-...\"\n"
+        "3. Set ANTHROPIC_API_KEY environment variable"
+    )
+
+# ==============================================================================
 # ADVANCED AI ASSISTANT
 # ==============================================================================
 
@@ -136,10 +194,11 @@ class ClaudeAssistant:
     7. Context window management
     8. Comprehensive cost tracking
     9. Request/response logging
+    10. Streamlit secrets integration
     """
     
     def __init__(self, 
-                 api_key: str,
+                 api_key: Optional[str] = None,
                  enable_caching: bool = True,
                  enable_prompt_caching: bool = True,
                  enable_batch: bool = True,
@@ -149,7 +208,7 @@ class ClaudeAssistant:
         Initialize advanced AI assistant
         
         Args:
-            api_key: Anthropic API key
+            api_key: Anthropic API key (optional if using Streamlit secrets)
             enable_caching: Enable response caching
             enable_prompt_caching: Enable prompt caching (90% savings)
             enable_batch: Enable batch predictions
@@ -160,12 +219,15 @@ class ClaudeAssistant:
             raise ImportError("anthropic package required. "
                             "Install with: pip install anthropic")
         
+        # Get API key from multiple sources
+        retrieved_key = get_api_key(api_key)
+        
         # Validate API key
-        self._validate_api_key(api_key)
+        self._validate_api_key(retrieved_key)
         
         # Initialize client
         try:
-            self.client = Anthropic(api_key=api_key)
+            self.client = Anthropic(api_key=self.api_key)
             logger.info("✅ AI Assistant initialized successfully")
         except Exception as e:
             raise ValueError(f"Failed to create Anthropic client: {str(e)}")
@@ -229,10 +291,9 @@ class ClaudeAssistant:
         
         if cache_key in self.response_cache:
             cache_entry = self.response_cache[cache_key]
-            
             if not cache_entry.is_expired():
                 self.cache_hits += 1
-                logger.debug(f"Cache hit for key {cache_key[:8]}...")
+                logger.debug(f"Cache hit for key: {cache_key[:8]}...")
                 return cache_entry.predictions
             else:
                 # Remove expired entry
@@ -241,272 +302,270 @@ class ClaudeAssistant:
         self.cache_misses += 1
         return None
     
-    def _save_to_cache(self, cache_key: str, predictions: Dict[str, float]):
-        """Save predictions to cache"""
-        if not self.enable_caching:
-            return
-        
-        self.response_cache[cache_key] = PredictionCache(
-            predictions=predictions,
-            timestamp=datetime.now(),
-            ttl_minutes=15
-        )
-        
-        logger.debug(f"Saved to cache: {cache_key[:8]}...")
+    def _store_cache(self, cache_key: str, predictions: Dict[str, float]):
+        """Store predictions in cache"""
+        if self.enable_caching:
+            self.response_cache[cache_key] = PredictionCache(
+                predictions=predictions,
+                timestamp=datetime.now()
+            )
+            logger.debug(f"Cached predictions for key: {cache_key[:8]}...")
     
-    def _log_request(self, request: APIRequest):
-        """Log API request"""
-        self.request_history.append(request)
-        self.total_cost += request.cost
-        self.total_tokens += request.tokens_used
-        
-        if self.log_requests:
-            log_entry = {
-                'timestamp': request.timestamp.isoformat(),
-                'model': request.model,
-                'tokens': request.tokens_used,
-                'cost': request.cost,
-                'cache_hit': request.cache_hit,
-                'success': request.success,
-                'latency_ms': request.latency_ms,
-                'type': request.request_type
-            }
-            
-            # Append to daily log file
-            log_file = f"logs/api_requests_{datetime.now().strftime('%Y%m%d')}.jsonl"
-            with open(log_file, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
-    
-    @retry_with_exponential_backoff(max_retries=3, base_delay=1.0)
-    def _call_claude(self,
-                    prompt: str,
-                    system: Optional[str] = None,
-                    max_tokens: int = 4000,
-                    use_caching: bool = False,
-                    model: Optional[str] = None) -> str:
+    @retry_with_exponential_backoff(max_retries=3)
+    def _call_claude(self, 
+                     user_prompt: str,
+                     system_prompt: str,
+                     max_tokens: int = 2000,
+                     temperature: float = 1.0) -> str:
         """
-        Make API call to Claude with advanced features
+        Call Claude API with retry logic and prompt caching
         
         Args:
-            prompt: User prompt
-            system: System prompt
+            user_prompt: User message
+            system_prompt: System prompt (cached if enabled)
             max_tokens: Maximum response tokens
-            use_caching: Use prompt caching
-            model: Model to use (defaults to primary)
+            temperature: Sampling temperature
             
         Returns:
-            Claude's response text
+            Response text
         """
         start_time = time.time()
         
-        if model is None:
-            model = self.primary_model
-        
         try:
-            # Build request kwargs
-            kwargs = {
-                "model": model,
-                "max_tokens": max_tokens,
-                "messages": [{"role": "user", "content": prompt}]
-            }
+            # Build messages
+            messages = [{"role": "user", "content": user_prompt}]
             
-            # Add system prompt with caching if enabled
-            if system:
-                if use_caching and self.enable_prompt_caching:
-                    # Use prompt caching for system message
-                    kwargs["system"] = [
-                        {
-                            "type": "text",
-                            "text": system,
-                            "cache_control": {"type": "ephemeral"}
-                        }
-                    ]
-                else:
-                    kwargs["system"] = system
+            # Configure system prompt with caching if enabled
+            if self.enable_prompt_caching:
+                system = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+            else:
+                system = system_prompt
             
-            # Make API call
-            response = self.client.messages.create(**kwargs)
-            
-            # Calculate latency
-            latency_ms = (time.time() - start_time) * 1000
+            # Call API
+            response = self.client.messages.create(
+                model=self.primary_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                messages=messages
+            )
             
             # Extract text
             response_text = response.content[0].text
             
-            # Calculate cost (approximate)
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            
-            # Cost calculation (Claude Sonnet 4)
-            input_cost = (input_tokens / 1_000_000) * 3.00  # $3 per 1M input tokens
-            output_cost = (output_tokens / 1_000_000) * 15.00  # $15 per 1M output tokens
-            
-            # Check for cache hit
-            cache_hit = hasattr(response.usage, 'cache_read_input_tokens') and \
-                       response.usage.cache_read_input_tokens > 0
-            
-            if cache_hit:
-                # 90% discount on cached tokens
-                cached_tokens = response.usage.cache_read_input_tokens
-                input_cost = (cached_tokens / 1_000_000) * 0.30  # $0.30 per 1M cached
-            
-            total_cost = input_cost + output_cost
+            # Track usage
+            tokens_used = response.usage.input_tokens + response.usage.output_tokens
+            cost = self._calculate_cost(response.usage)
             
             # Log request
-            self._log_request(APIRequest(
-                timestamp=datetime.now(),
-                model=model,
-                tokens_used=input_tokens + output_tokens,
-                cost=total_cost,
-                cache_hit=cache_hit,
+            latency_ms = (time.time() - start_time) * 1000
+            self._log_request(
+                model=self.primary_model,
+                tokens=tokens_used,
+                cost=cost,
+                cache_hit=False,
                 success=True,
                 latency_ms=latency_ms,
-                request_type='completion'
-            ))
+                request_type="standard"
+            )
             
             return response_text
             
-        except RateLimitError:
-            logger.warning("Rate limit exceeded, will retry...")
-            raise  # Let decorator handle retry
-            
-        except APIError as e:
-            logger.error(f"API error: {str(e)}")
-            
-            # Try fallback model on certain errors
-            if model == self.primary_model and "overloaded" in str(e).lower():
-                logger.info(f"Trying fallback model: {self.fallback_model}")
-                return self._call_claude(prompt, system, max_tokens, 
-                                       use_caching, self.fallback_model)
+        except Exception as e:
+            # Log failed request
+            latency_ms = (time.time() - start_time) * 1000
+            self._log_request(
+                model=self.primary_model,
+                tokens=0,
+                cost=0,
+                cache_hit=False,
+                success=False,
+                latency_ms=latency_ms,
+                request_type="failed"
+            )
             raise
     
+    def _calculate_cost(self, usage) -> float:
+        """Calculate API call cost"""
+        # Claude Sonnet 4 pricing (per million tokens)
+        input_cost_per_mtok = 3.00
+        output_cost_per_mtok = 15.00
+        cache_write_cost_per_mtok = 3.75
+        cache_read_cost_per_mtok = 0.30
+        
+        cost = 0.0
+        
+        # Input tokens
+        cost += (usage.input_tokens / 1_000_000) * input_cost_per_mtok
+        
+        # Output tokens
+        cost += (usage.output_tokens / 1_000_000) * output_cost_per_mtok
+        
+        # Cache tokens (if available)
+        if hasattr(usage, 'cache_creation_input_tokens'):
+            cost += (usage.cache_creation_input_tokens / 1_000_000) * cache_write_cost_per_mtok
+        if hasattr(usage, 'cache_read_input_tokens'):
+            cost += (usage.cache_read_input_tokens / 1_000_000) * cache_read_cost_per_mtok
+        
+        return cost
+    
+    def _log_request(self, 
+                     model: str,
+                     tokens: int,
+                     cost: float,
+                     cache_hit: bool,
+                     success: bool,
+                     latency_ms: float,
+                     request_type: str):
+        """Log API request"""
+        request = APIRequest(
+            timestamp=datetime.now(),
+            model=model,
+            tokens_used=tokens,
+            cost=cost,
+            cache_hit=cache_hit,
+            success=success,
+            latency_ms=latency_ms,
+            request_type=request_type
+        )
+        
+        self.request_history.append(request)
+        self.total_cost += cost
+        self.total_tokens += tokens
+        
+        if self.log_requests:
+            log_file = Path("logs") / f"requests_{datetime.now().strftime('%Y%m%d')}.jsonl"
+            with open(log_file, 'a') as f:
+                log_entry = asdict(request)
+                log_entry['timestamp'] = log_entry['timestamp'].isoformat()
+                f.write(json.dumps(log_entry) + '\n')
+    
     def predict_ownership(self, 
-                         players_df: pd.DataFrame,
-                         use_batch: bool = True) -> Dict[str, float]:
+                         player_data: pd.DataFrame,
+                         use_batch: bool = None) -> Dict[str, float]:
         """
-        Predict ownership with caching and batch optimization
+        Predict ownership percentages with caching
         
         Args:
-            players_df: DataFrame with player data
-            use_batch: Use batch prediction if possible
+            player_data: Player information
+            use_batch: Use batch API (default: use instance setting)
             
         Returns:
-            Dictionary mapping player names to ownership %
+            Dictionary mapping player names to ownership percentages
         """
+        if use_batch is None:
+            use_batch = self.enable_batch
+        
         # Generate cache key
-        player_data = players_df[['name', 'position', 'salary', 'projection']].to_dict('records')
-        cache_key = self._generate_cache_key(player_data)
+        cache_key = self._generate_cache_key(player_data.to_dict())
         
         # Check cache
         cached_result = self._check_cache(cache_key)
         if cached_result is not None:
-            logger.info(f"✅ Using cached ownership predictions ({len(cached_result)} players)")
+            logger.info("✅ Using cached predictions")
             return cached_result
         
-        # Prepare player list
-        player_list = []
-        for _, player in players_df.iterrows():
-            player_info = {
+        # Prepare player summary
+        player_summary = []
+        for _, player in player_data.iterrows():
+            player_summary.append({
                 'name': str(player['name']),
                 'position': str(player['position']),
-                'team': str(player.get('team', 'UNKNOWN')),
                 'salary': int(player['salary']),
                 'projection': float(player['projection']),
-                'value': float(player['projection'] / (player['salary'] / 1000))
-            }
-            player_list.append(player_info)
+                'team': str(player.get('team', 'N/A')),
+                'opponent': str(player.get('opponent', 'N/A'))
+            })
         
-        # System prompt (cacheable)
-        system_prompt = """You are an elite DFS analyst with PhD-level expertise in behavioral economics and game theory. You specialize in predicting ownership patterns by modeling:
+        system_prompt = """You are an expert DFS (Daily Fantasy Sports) analyst specializing in ownership prediction.
 
-1. **Recency Bias**: Recent performances drive overownership
-2. **Value Heuristic**: Cheap "value" plays get overowned by casual players
-3. **Star Power**: Big names attract ownership regardless of value
-4. **Position Scarcity**: Limited good options at a position drives ownership
-5. **Salary Psychology**: Round numbers and pricing relative to peers
-6. **Narrative**: Media coverage and storylines influence the masses
+Your task is to predict what percentage of lineups will include each player based on:
+- Salary (value plays get higher ownership)
+- Projected points (higher projections = higher ownership)
+- Position scarcity
+- Game environment
+- Public perception
 
-Your predictions are consistently within 3% of actual ownership."""
+Return ONLY a JSON object with player names as keys and ownership percentages (0-100) as values.
+NO other text, explanations, or formatting."""
 
-        # User prompt
-        user_prompt = f"""Predict ownership percentages for this DFS contest.
+        user_prompt = f"""Predict ownership % for these players in tonight's main slate:
 
-Players:
-{json.dumps(player_list, indent=2)}
+{json.dumps(player_summary, indent=2)}
 
-**Analysis Framework:**
-- Value plays (>3.0 pts/$1K): Expect 20-35% ownership
-- Star QBs in good matchups: 15-30% ownership
-- Premium WR1s: 12-25% ownership  
-- Cheap plays in great spots: 25-45% ownership (chalk)
-- Expensive RBs: 8-18% ownership
-- Contrarian fades: 3-8% ownership
+Return ONLY this JSON format:
+{{
+  "Player Name": 15.5,
+  "Another Player": 22.3,
+  ...
+}}
 
-Return ONLY a JSON object mapping player names to ownership percentages.
-Format: {{"Player Name": 25.5, "Another Player": 18.2}}
+Key factors:
+- Value plays (high proj/salary) get 15-30% ownership
+- Stars at reasonable prices get 20-40% ownership  
+- Top tier studs get 25-50% ownership
+- Punt plays (very cheap) get 5-15% ownership
+- Average players get 8-15% ownership
 
-CRITICAL: Return ONLY the JSON object. No other text. No markdown. No explanations."""
+NO OTHER TEXT. ONLY JSON."""
 
         try:
-            # Call Claude with prompt caching
-            response_text = self._call_claude(
-                prompt=user_prompt,
-                system=system_prompt,
-                max_tokens=2000,
-                use_caching=True  # System prompt will be cached
-            )
+            # Call Claude
+            response = self._call_claude(user_prompt, system_prompt, max_tokens=2000)
             
-            # Parse JSON response
-            response_text = response_text.strip()
+            # Clean response
+            response = response.strip().replace('```json', '').replace('```', '').strip()
             
-            # Remove markdown code blocks if present
-            if response_text.startswith('```'):
-                response_text = response_text.replace('```json\n', '').replace('```\n', '').replace('```', '').strip()
+            # Parse JSON
+            predictions = json.loads(response)
             
-            ownership_predictions = json.loads(response_text)
+            # Validate predictions
+            validated_predictions = {}
+            for name, ownership in predictions.items():
+                try:
+                    validated_predictions[name] = float(ownership)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid ownership for {name}: {ownership}")
+                    validated_predictions[name] = 15.0
             
-            # Validate and clean predictions
-            valid_predictions = {}
-            for name, ownership in ownership_predictions.items():
-                clean_name = str(name).strip()
-                
-                # Clamp ownership to valid range
-                ownership_val = float(ownership)
-                ownership_val = max(1.0, min(ownership_val, 90.0))
-                
-                valid_predictions[clean_name] = ownership_val
+            # Store in cache
+            self._store_cache(cache_key, validated_predictions)
             
-            # Save to cache
-            self._save_to_cache(cache_key, valid_predictions)
-            
-            logger.info(f"✅ Predicted ownership for {len(valid_predictions)} players")
-            return valid_predictions
+            logger.info(f"✅ Generated predictions for {len(validated_predictions)} players")
+            return validated_predictions
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {e}")
-            logger.debug(f"Response was: {response_text[:200]}")
-            
-            # Return default predictions
-            return {str(p['name']): 15.0 for p in player_list}
-            
+            logger.error(f"Response was: {response[:200]}")
+            return {player['name']: 15.0 for player in player_summary}
+        
         except Exception as e:
-            logger.error(f"Ownership prediction error: {e}")
-            return {str(p['name']): 15.0 for p in player_list}
+            logger.error(f"Prediction error: {e}")
+            return {player['name']: 15.0 for player in player_summary}
     
-    def predict_ownership_batch(self,
-                               player_batches: List[pd.DataFrame]) -> List[Dict[str, float]]:
+    def predict_batch_slates(self, 
+                            slate_dataframes: List[pd.DataFrame],
+                            batch_size: int = 5) -> List[Dict[str, float]]:
         """
-        Batch predict ownership for multiple slates
+        Process multiple slates with batch optimization
         
         Args:
-            player_batches: List of player DataFrames
+            slate_dataframes: List of player dataframes (one per slate)
+            batch_size: Players per batch
             
         Returns:
-            List of ownership dictionaries
+            List of prediction dictionaries
         """
         results = []
         
-        logger.info(f"Batch predicting ownership for {len(player_batches)} slates...")
+        # Process each slate
+        player_batches = slate_dataframes
         
         for i, batch in enumerate(player_batches):
             logger.info(f"Processing batch {i+1}/{len(player_batches)}...")
@@ -732,4 +791,5 @@ __all__ = [
     'ClaudeAssistant',
     'APIRequest',
     'PredictionCache',
+    'get_api_key',
 ]
