@@ -115,3 +115,11 @@ tmp/
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+.streamlit/
+
+# Environment files
+.env
+*.env
