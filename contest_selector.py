@@ -35,6 +35,70 @@ class Contest:
     min_cash: Optional[float] = None
 
 
+@dataclass
+class ContestPreset:
+    """Contest configuration preset"""
+    name: str
+    contest_type: str
+    size: int
+    entry_fee: float
+    prize_pool: float
+    top_payout: float
+    places_paid: int
+    min_cash: float
+    salary_cap: int
+    num_lineups: int
+    use_genetic: bool
+    optimize_for_variance: bool
+
+
+# Default contest presets
+CONTEST_PRESETS = {
+    'showdown': ContestPreset(
+        name='Showdown',
+        contest_type='GPP',
+        size=10000,
+        entry_fee=5.0,
+        prize_pool=50000,
+        top_payout=10000,
+        places_paid=2000,
+        min_cash=10,
+        salary_cap=50000,
+        num_lineups=20,
+        use_genetic=True,
+        optimize_for_variance=True
+    ),
+    'cash': ContestPreset(
+        name='Cash',
+        contest_type='CASH',
+        size=100,
+        entry_fee=10.0,
+        prize_pool=1800,
+        top_payout=18,
+        places_paid=50,
+        min_cash=18,
+        salary_cap=50000,
+        num_lineups=1,
+        use_genetic=False,
+        optimize_for_variance=False
+    ),
+    'gpp': ContestPreset(
+        name='GPP',
+        contest_type='GPP',
+        size=100000,
+        entry_fee=3.0,
+        prize_pool=300000,
+        top_payout=100000,
+        places_paid=20000,
+        min_cash=6,
+        salary_cap=50000,
+        num_lineups=150,
+        use_genetic=True,
+        optimize_for_variance=True
+    )
+}
+
+
 class ContestSelector:
     """
     Analyzes and recommends contests based on lineup portfolio.
@@ -471,66 +535,3 @@ class ContestSelector:
         report += "\n" + "=" * 70 + "\n"
         
         return report
-
-    # Contest Presets
-    @dataclass
-    class ContestPreset:
-        """Contest configuration preset"""
-        name: str
-        contest_type: str
-        size: int
-        entry_fee: float
-        prize_pool: float
-        top_payout: float
-        places_paid: int
-        min_cash: float
-        salary_cap: int
-        num_lineups: int
-        use_genetic: bool
-        optimize_for_variance: bool
-
-    # Default presets
-    CONTEST_PRESETS = {
-        'showdown': ContestPreset(
-            name='Showdown',
-            contest_type='GPP',
-            size=10000,
-            entry_fee=5.0,
-            prize_pool=50000,
-            top_payout=10000,
-            places_paid=2000,
-            min_cash=10,
-            salary_cap=50000,
-            num_lineups=20,
-            use_genetic=True,
-            optimize_for_variance=True
-        ),
-        'cash': ContestPreset(
-            name='Cash',
-            contest_type='CASH',
-            size=100,
-            entry_fee=10.0,
-            prize_pool=1800,
-            top_payout=18,
-            places_paid=50,
-            min_cash=18,
-            salary_cap=50000,
-            num_lineups=1,
-            use_genetic=False,
-            optimize_for_variance=False
-        ),
-        'gpp': ContestPreset(
-            name='GPP',
-            contest_type='GPP',
-            size=100000,
-            entry_fee=3.0,
-            prize_pool=300000,
-            top_payout=100000,
-            places_paid=20000,
-            min_cash=6,
-            salary_cap=50000,
-            num_lineups=150,
-            use_genetic=True,
-            optimize_for_variance=True
-        )
-    }
