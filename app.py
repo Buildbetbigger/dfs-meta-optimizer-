@@ -624,7 +624,7 @@ def main():
     try:
         players_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
         players_df = fix_csv_columns(players_df)
-        st.success(f" Loaded {len(player_pool)} players")
+        st.success(f"✅ Loaded {len(players_df)} players")
     except Exception as e:
         st.error(f"Error loading CSV: {e}")
         return
