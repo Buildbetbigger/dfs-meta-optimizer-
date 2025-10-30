@@ -55,9 +55,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 def fix_csv_columns(df):
-    """Auto-fix CSV columns"""
+    """COMPLETE version - handles blanks"""
     if 'first_name' in df.columns and 'last_name' in df.columns:
-        df['name'] = df['first_name'] + ' ' + df['last_name']
+        df['name'] = (df['first_name'].fillna('') + ' ' +
+                      df['last_name'].fillna('')).str.strip()
         df = df.drop(columns=['first_name', 'last_name'])
     return df
 
