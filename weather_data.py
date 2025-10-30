@@ -1,13 +1,13 @@
 """
-Module 4: Weather Data Integration - ENHANCED v7.1.0
-Fetches LIVE weather data for NFL games to inform DFS decisions
+Module 4: Weather Data Integration - UPDATED v7.1.0
+Fetches weather data for NFL games to inform DFS decisions
 
-NEW in v7.1.0:
-- Live API integration with OpenWeatherMap
-- Automatic .env file loading for API keys
-- Response caching (1 hour TTL)
+UPDATES in v7.1.0:
+- Streamlit secrets integration for API key
 - Enhanced error handling with fallbacks
+- Response caching (1 hour TTL)
 - Better logging and monitoring
+- Improved API reliability
 """
 
 import pandas as pd
@@ -29,34 +29,34 @@ class WeatherDataProvider:
     - Temperature: Affects ball handling, player performance
     - Dome games: No weather impact
     
-    v7.1.0: Now with LIVE API integration!
+    v7.1.0: Now with Streamlit secrets integration!
     """
     
     # NFL stadium locations
     STADIUM_CITIES = {
-        'ARI': 'Phoenix',
-        'ATL': 'Atlanta',
+        'ARI': 'Phoenix',  # State Farm Stadium (retractable roof)
+        'ATL': 'Atlanta',  # Mercedes-Benz Stadium (retractable roof)
         'BAL': 'Baltimore',
         'BUF': 'Buffalo',
         'CAR': 'Charlotte',
         'CHI': 'Chicago',
         'CIN': 'Cincinnati',
         'CLE': 'Cleveland',
-        'DAL': 'Arlington',
+        'DAL': 'Arlington',  # AT&T Stadium (retractable roof)
         'DEN': 'Denver',
-        'DET': 'Detroit',
+        'DET': 'Detroit',  # Ford Field (dome)
         'GB': 'Green Bay',
-        'HOU': 'Houston',
-        'IND': 'Indianapolis',
+        'HOU': 'Houston',  # NRG Stadium (retractable roof)
+        'IND': 'Indianapolis',  # Lucas Oil Stadium (retractable roof)
         'JAX': 'Jacksonville',
         'KC': 'Kansas City',
-        'LAC': 'Los Angeles',
-        'LAR': 'Los Angeles',
-        'LV': 'Las Vegas',
+        'LAC': 'Los Angeles',  # SoFi Stadium (indoor)
+        'LAR': 'Los Angeles',  # SoFi Stadium (indoor)
+        'LV': 'Las Vegas',  # Allegiant Stadium (dome)
         'MIA': 'Miami',
-        'MIN': 'Minneapolis',
+        'MIN': 'Minneapolis',  # U.S. Bank Stadium (dome)
         'NE': 'Foxborough',
-        'NO': 'New Orleans',
+        'NO': 'New Orleans',  # Superdome (dome)
         'NYG': 'East Rutherford',
         'NYJ': 'East Rutherford',
         'PHI': 'Philadelphia',
@@ -83,20 +83,30 @@ class WeatherDataProvider:
         Initialize weather data provider.
         
         Args:
-            api_key: OpenWeatherMap API key (optional, will load from .env)
+            api_key: OpenWeatherMap API key (optional)
+                    If not provided, will try to load from Streamlit secrets
                     Get free key at: https://openweathermap.org/api
         """
-        # Try to load from environment if not provided
+        # Try to load API key from multiple sources
         if not api_key:
+            # Try Streamlit secrets first
             try:
-                from dotenv import load_dotenv
-                import os
-                load_dotenv()
-                api_key = os.getenv('OPENWEATHER_API_KEY')
-            except ImportError:
-                logger.warning("python-dotenv not installed. Install with: pip install python-dotenv")
+                import streamlit as st
+                api_key = st.secrets.get("OPENWEATHER_API_KEY")
+                if api_key:
+                    logger.info("✅ Weather API key loaded from Streamlit secrets")
             except Exception as e:
-                logger.warning(f"Error loading .env file: {e}")
+                logger.debug(f"Could not load from Streamlit secrets: {e}")
+            
+            # Try environment variables as fallback
+            if not api_key:
+                try:
+                    import os
+                    api_key = os.getenv('OPENWEATHER_API_KEY')
+                    if api_key:
+                        logger.info("✅ Weather API key loaded from environment")
+                except Exception as e:
+                    logger.debug(f"Could not load from environment: {e}")
         
         self.api_key = api_key
         self.base_url = "https://api.openweathermap.org/data/2.5/forecast"
@@ -107,9 +117,12 @@ class WeatherDataProvider:
         
         if not api_key:
             logger.warning("⚠️ No API key provided. Weather data will be estimated.")
-            logger.info("To enable live weather: Get free API key from https://openweathermap.org/api")
+            logger.info("📝 To enable live weather:")
+            logger.info("   1. Get free API key from https://openweathermap.org/api")
+            logger.info("   2. Add to .streamlit/secrets.toml:")
+            logger.info("      OPENWEATHER_API_KEY = \"your_key_here\"")
         else:
-            logger.info("✅ Weather API initialized with live data source")
+            logger.info("✅ WeatherDataProvider initialized with live API")
         
         logger.info("WeatherDataProvider v7.1.0 initialized")
     
@@ -219,6 +232,7 @@ class WeatherDataProvider:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 logger.error(f"🔑 Invalid API key for {city} - using defaults")
+                logger.error("   Check your API key in .streamlit/secrets.toml")
             elif e.response.status_code == 404:
                 logger.error(f"🌍 City not found: {city} - using defaults")
             else:
@@ -476,7 +490,7 @@ def add_weather_data(
     
     Args:
         players_df: Players DataFrame
-        api_key: OpenWeatherMap API key (optional, loads from .env)
+        api_key: OpenWeatherMap API key (optional, loads from Streamlit secrets)
     
     Returns:
         DataFrame with weather columns
