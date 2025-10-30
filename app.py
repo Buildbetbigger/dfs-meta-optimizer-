@@ -667,7 +667,7 @@ def main():
         
         # Add news item
         with st.expander(" Add News Item"):
-            news_player = st.selectbox("Player", player_df['name'].tolist(), key="news_player")
+            news_player = st.selectbox("Player", players_df['name'].tolist(), key="news_player")
             news_headline = st.text_input("Headline", key="news_headline")
             news_content = st.text_area("Content", key="news_content")
             news_source = st.text_input("Source", value="manual", key="news_source")
@@ -763,7 +763,7 @@ def main():
         
         # Initialize ownership tracker
         if 'ownership_tracker' not in st.session_state:
-            st.session_state.ownership_tracker = OwnershipTracker(player_df)
+            st.session_state.ownership_tracker = OwnershipTracker(players_df)
         
         ownership_tracker = st.session_state.ownership_tracker
         
@@ -784,20 +784,20 @@ def main():
                 # Get news impacts
                 news_impacts = {}
                 if 'news_monitor' in st.session_state:
-                    for player_name in player_df['name']:
+                    for player_name in players_df['name']:
                         # Get recent news impact (simplified)
                         news_impacts[player_name] = 0.0
                 
                 # Batch predict
                 updated_pool = ownership_tracker.batch_predict_ownership(
-                    player_df,
+                    players_df,
                     contest_type=pred_contest_type,
                     vegas_implied_totals=implied_totals,
                     news_impacts=news_impacts
                 )
                 
                 # Update player pool with predictions
-                player_df['ownership'] = updated_pool['ownership']
+                players_df['ownership'] = updated_pool['ownership']
                 
                 st.success(" Ownership predictions complete!")
                 
@@ -822,7 +822,7 @@ def main():
                     st.dataframe(chalk_df, use_container_width=True)
                 
                 # Leverage plays
-                leverage_plays = ownership_tracker.identify_leverage_plays(player_df, 15.0)
+                leverage_plays = ownership_tracker.identify_leverage_plays(players_df, 15.0)
                 if not leverage_plays.empty:
                     st.markdown("####  Leverage Plays")
                     st.dataframe(leverage_plays, use_container_width=True)
@@ -845,10 +845,10 @@ def main():
         if st.button(" Fetch Weather Data"):
             with st.spinner("Fetching weather for all games..."):
                 # Add weather data to player pool
-                enriched_pool = weather_provider.add_weather_to_players(player_df)
+                enriched_pool = weather_provider.add_weather_to_players(players_df)
                 
                 # Update player pool
-                player_df = enriched_pool
+                players_df = enriched_pool
                 
                 st.success(" Weather data added!")
                 
@@ -878,17 +878,17 @@ def main():
         with st.expander(" Manual Weather Override"):
             st.markdown("Override weather for specific games/teams")
             
-            weather_team = st.selectbox("Team", player_df['team'].unique().tolist(), key="weather_team")
+            weather_team = st.selectbox("Team", players_df['team'].unique().tolist(), key="weather_team")
             weather_temp = st.number_input("Temperature (F)", value=65, step=1)
             weather_wind = st.number_input("Wind Speed (mph)", value=5, step=1)
             weather_conditions = st.selectbox("Conditions", ['Clear', 'Cloudy', 'Rain', 'Snow', 'Thunderstorm'])
             
             if st.button("Apply Weather Override"):
                 # Apply manual weather
-                team_mask = player_df['team'] == weather_team
-                player_df.loc[team_mask, 'weather_temp'] = weather_temp
-                player_df.loc[team_mask, 'weather_wind'] = weather_wind
-                player_df.loc[team_mask, 'weather_conditions'] = weather_conditions
+                team_mask = players_df['team'] == weather_team
+                players_df.loc[team_mask, 'weather_temp'] = weather_temp
+                players_df.loc[team_mask, 'weather_wind'] = weather_wind
+                players_df.loc[team_mask, 'weather_conditions'] = weather_conditions
                 
                 # Recalculate impact
                 impact = weather_provider.get_weather_impact_score({
@@ -899,9 +899,9 @@ def main():
                 })
                 
                 for pos in ['QB', 'RB', 'WR', 'TE', 'K']:
-                    pos_mask = team_mask & (player_df['position'] == pos)
+                    pos_mask = team_mask & (players_df['position'] == pos)
                     if pos_mask.any():
-                        player_df.loc[pos_mask, 'weather_impact'] = impact.get(pos, 100)
+                        players_df.loc[pos_mask, 'weather_impact'] = impact.get(pos, 100)
                 
                 st.success(f" Applied weather override to {weather_team}")
     
@@ -935,29 +935,29 @@ def main():
                 
                 if not injury_report.empty:
                     # Add to player pool
-                    player_df = injury_tracker.add_injury_status_to_players(
-                        player_df, 
+                    players_df = injury_tracker.add_injury_status_to_players(
+                        players_df, 
                         injury_report
                     )
                     
                     # Adjust projections if requested
                     if auto_adjust:
-                        player_df = injury_tracker.adjust_projections_for_injury(player_df)
+                        players_df = injury_tracker.adjust_projections_for_injury(players_df)
                     
                     # Filter if requested
-                    original_count = len(player_df)
+                    original_count = len(players_df)
                     if filter_injured:
-                        player_df = injury_tracker.filter_healthy_players(player_df)
-                        st.info(f" Filtered {original_count - len(player_df)} injured players")
+                        players_df = injury_tracker.filter_healthy_players(players_df)
+                        st.info(f" Filtered {original_count - len(players_df)} injured players")
                     
                     st.success(f" Injury data added from {injury_source}")
                     
                     # Show injury report
-                    injury_text = injury_tracker.get_injury_report(player_df)
+                    injury_text = injury_tracker.get_injury_report(players_df)
                     st.text(injury_text)
                     
                     # Show injury details
-                    injured = player_df[player_df['injury_status'] != 'HEALTHY']
+                    injured = players_df[players_df['injury_status'] != 'HEALTHY']
                     if not injured.empty:
                         st.markdown("####  Injured Players")
                         injury_df = injured[[
@@ -974,24 +974,24 @@ def main():
         with st.expander(" Manual Injury Entry"):
             st.markdown("Manually add or update injury status")
             
-            injury_player = st.selectbox("Player", player_df['name'].tolist(), key="injury_player")
+            injury_player = st.selectbox("Player", players_df['name'].tolist(), key="injury_player")
             injury_status = st.selectbox("Status", ['HEALTHY', 'QUESTIONABLE', 'DOUBTFUL', 'OUT'])
             injury_type = st.text_input("Injury Type", "N/A")
             
             if st.button("Update Injury Status"):
-                player_mask = player_df['name'] == injury_player
-                player_df.loc[player_mask, 'injury_status'] = injury_status
-                player_df.loc[player_mask, 'injury_type'] = injury_type
+                player_mask = players_df['name'] == injury_player
+                players_df.loc[player_mask, 'injury_status'] = injury_status
+                players_df.loc[player_mask, 'injury_type'] = injury_type
                 
                 # Set impact
                 impact_map = {'OUT': 0.0, 'DOUBTFUL': 0.3, 'QUESTIONABLE': 0.75, 'HEALTHY': 1.0}
-                player_df.loc[player_mask, 'injury_impact'] = impact_map.get(injury_status, 1.0)
+                players_df.loc[player_mask, 'injury_impact'] = impact_map.get(injury_status, 1.0)
                 
                 # Adjust projection if not healthy
                 if injury_status != 'HEALTHY' and auto_adjust:
-                    original_proj = player_df.loc[player_mask, 'projection'].values[0]
+                    original_proj = players_df.loc[player_mask, 'projection'].values[0]
                     new_proj = original_proj * impact_map.get(injury_status, 1.0)
-                    player_df.loc[player_mask, 'projection'] = new_proj
+                    players_df.loc[player_mask, 'projection'] = new_proj
                     st.info(f" Adjusted projection: {original_proj:.1f}  {new_proj:.1f}")
                 
                 st.success(f" Updated {injury_player} status to {injury_status}")
@@ -1001,10 +1001,10 @@ def main():
         with st.spinner(" AI analyzing ownership trends..."):
             try:
                 assistant = ClaudeAssistant(api_key)
-                predictions = assistant.predict_ownership(player_df)
+                predictions = assistant.predict_ownership(players_df)
                 
                 if predictions:
-                    player_df['ownership'] = player_df['name'].map(predictions)
+                    players_df['ownership'] = players_df['name'].map(predictions)
                     st.success(" AI ownership predictions applied")
             except Exception as e:
                 st.warning(f"AI prediction failed: {e}")
@@ -1035,7 +1035,7 @@ def main():
                 
                 # Generate lineups
                 lineups, stacking_report, exposure_report = optimize_lineups(
-                    player_df,
+                    players_df,
                     num_lineups=num_lineups,
                     contest_preset=preset_name,
                     custom_config=config if not preset_name else None,
@@ -1050,18 +1050,18 @@ def main():
                 
                 # Apply filters
                 if filter_options['remove_duplicates']:
-                    lineup_filter = LineupFilter(player_df)
+                    lineup_filter = LineupFilter(players_df)
                     lineups = lineup_filter.remove_exact_duplicates(lineups)
                 
                 if filter_options['apply_similarity']:
-                    lineup_filter = LineupFilter(player_df)
+                    lineup_filter = LineupFilter(players_df)
                     lineups = lineup_filter.remove_similar_lineups(
                         lineups,
                         min_unique_players=filter_options['min_unique_players']
                     )
                 
                 if filter_options['apply_diversify']:
-                    lineup_filter = LineupFilter(player_df)
+                    lineup_filter = LineupFilter(players_df)
                     lineups = lineup_filter.diversify_portfolio(
                         lineups,
                         target_size=len(lineups),
@@ -1109,7 +1109,7 @@ def main():
                     st.markdown("---")
                     st.markdown("###  Most Contrarian Lineups")
                     
-                    lineup_filter = LineupFilter(player_df)
+                    lineup_filter = LineupFilter(players_df)
                     unique_lineups = lineup_filter.find_most_unique_lineups(lineups, n=min(10, len(lineups)))
                     
                     st.write(f"Showing {len(unique_lineups)} most unique lineups:")
@@ -1175,10 +1175,10 @@ def main():
                 ])
                 
                 with analytics_tabs[0]:
-                    render_advanced_analytics_tab(lineups, player_df)
+                    render_advanced_analytics_tab(lineups, players_df)
                 
                 with analytics_tabs[1]:
-                    render_contest_simulation_tab(lineups, player_df)
+                    render_contest_simulation_tab(lineups, players_df)
                 
             except Exception as e:
                 st.error(f"Optimization failed: {e}")
@@ -1190,7 +1190,7 @@ def main():
 # GROUP 6 ENHANCEMENTS - v7.0.0 UI COMPONENTS
 # ============================================================================
 
-def render_advanced_analytics_tab(lineups: List[Dict], player_df: pd.DataFrame):
+def render_advanced_analytics_tab(lineups: List[Dict], players_df: pd.DataFrame):
     """
     Render advanced analytics dashboard with 8D evaluation,
     variance analysis, and leverage scoring.
@@ -1203,7 +1203,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_df: pd.DataFrame):
         return
     
     # Create optimizer instance for analysis
-    optimizer = LineupOptimizer(player_df, {'salary_cap': 50000})
+    optimizer = LineupOptimizer(players_df, {'salary_cap': 50000})
     
     # Lineup selector
     st.markdown("---")
@@ -1398,7 +1398,7 @@ def render_advanced_analytics_tab(lineups: List[Dict], player_df: pd.DataFrame):
                 st.write(f" {player}: {exp:.1f}%")
 
 
-def render_contest_simulation_tab(lineups: List[Dict], player_df: pd.DataFrame):
+def render_contest_simulation_tab(lineups: List[Dict], players_df: pd.DataFrame):
     """
     Render contest simulation dashboard for estimating
     win probability and optimal lineup selection.
@@ -1440,7 +1440,7 @@ def render_contest_simulation_tab(lineups: List[Dict], player_df: pd.DataFrame):
     
     if st.button(" Run Contest Simulation", type="primary", use_container_width=True):
         
-        optimizer = LineupOptimizer(player_df, {'salary_cap': 50000})
+        optimizer = LineupOptimizer(players_df, {'salary_cap': 50000})
         
         with st.spinner(f"Simulating {num_sims:,} contests with {contest_size} entries each..."):
             sim_results = optimizer.simulate_contest_outcomes(
