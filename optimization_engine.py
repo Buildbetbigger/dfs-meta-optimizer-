@@ -56,6 +56,20 @@ from collections import defaultdict, Counter
 import logging
 from copy import deepcopy
 
+# v8.0.0: Performance monitoring integration
+try:
+    from performance_monitor import timed, time_section
+    PERFORMANCE_MONITORING_AVAILABLE = True
+    logger.info("✅ Performance monitoring enabled")
+except ImportError:
+    # Fallback no-op decorator if module not available
+    def timed(category='default', track_memory=False):
+        def decorator(func):
+            return func
+        return decorator
+    PERFORMANCE_MONITORING_AVAILABLE = False
+    logger.warning("⚠️ Performance monitoring not available")
+
 logger = logging.getLogger(__name__)
 
 
@@ -289,6 +303,10 @@ class ExposureManager:
         Returns:
             True if lineup can be added, False if it would violate
         """
+        # Skip exposure checks for single lineup
+        if total_target_lineups == 1:
+            return True
+        
         # Calculate exposure including this candidate
         test_lineups = existing_lineups + [candidate_lineup]
         exposure = self.calculate_current_exposure(test_lineups)
@@ -364,7 +382,7 @@ class ExposureManager:
                 'Count': int((exp_pct / 100) * len(lineups)),
                 'Salary': int(player_info['salary']),
                 'Projection': round(float(player_info['projection']), 1),
-                'Compliant': '✓' if is_compliant else '✗'
+                'Compliant': 'âœ“' if is_compliant else 'âœ—'
             })
         
         return pd.DataFrame(report_data)
@@ -890,7 +908,7 @@ class LineupFilter:
                 logger.warning(f"All lineups filtered out at filter: {filter_type}")
                 break
         
-        logger.info(f"Batch filtering: {len(lineups)} → {len(filtered)} lineups")
+        logger.info(f"Batch filtering: {len(lineups)} â†’ {len(filtered)} lineups")
         return filtered
 
 
@@ -1301,9 +1319,21 @@ class LineupOptimizer:
         self.player_pool = player_pool.copy()
         self.config = config
         self.salary_cap = config.get('salary_cap', 50000)
-        self.positions = config.get('positions', {
-            'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 1, 'DST': 1
-        })
+        
+        # Detect Showdown contest type
+        self.is_showdown = config.get('contest_type') == 'showdown'
+        
+        # Set positions based on contest type
+        if self.is_showdown:
+            # Showdown uses CPT + FLEX format
+            self.positions = {'CPT': 1, 'FLEX': 5}
+            # Ensure multiplier column exists for Captain
+            if 'multiplier' not in self.player_pool.columns:
+                self.player_pool['multiplier'] = 1.0
+        else:
+            self.positions = config.get('positions', {
+                'QB': 1, 'RB': 2, 'WR': 3, 'TE': 1, 'FLEX': 1, 'DST': 1
+            })
         
         # v6.2.0: Initialize exposure and filtering
         self.exposure_manager = ExposureManager(player_pool)
@@ -1354,6 +1384,7 @@ class LineupOptimizer:
         if 'opponent' not in self.player_pool.columns:
             self.player_pool['opponent'] = ''
     
+    @timed(category='lineup_generation', track_memory=True)
     def generate_lineups(self, num_lineups: int = 1) -> List[Dict]:
         """
         Generate optimal lineups with v6.2.0 exposure awareness.
@@ -1580,6 +1611,10 @@ class LineupOptimizer:
             ~self.player_pool['name'].isin(exclude_players)
         ].copy()
         
+        # Handle Showdown separately
+        if self.is_showdown:
+            return self._build_showdown_lineup(available)
+        
         if len(available) < sum(self.positions.values()):
             return None
         
@@ -1627,6 +1662,64 @@ class LineupOptimizer:
             'correlation_score': correlation_score
         }
     
+    def _build_showdown_lineup(self, available: pd.DataFrame) -> Optional[Dict]:
+        """Build Showdown lineup with CPT + 5 FLEX."""
+        if len(available) < 6:
+            return None
+        
+        available['composite_score'] = self._calculate_composite_score(available)
+        
+        lineup_players = []
+        remaining_salary = self.salary_cap
+        
+        # Pick Captain (1.5x multiplier, 1.5x salary)
+        captain_pool = available.copy()
+        captain_pool['cpt_salary'] = captain_pool['salary'] * 1.5
+        captain_pool = captain_pool[captain_pool['cpt_salary'] <= remaining_salary]
+        
+        if captain_pool.empty:
+            return None
+        
+        captain = captain_pool.nlargest(1, 'composite_score').iloc[0]
+        captain_dict = captain.to_dict()
+        captain_dict['position'] = 'CPT'
+        captain_dict['salary'] = int(captain['salary'] * 1.5)
+        captain_dict['projection'] = captain['projection'] * 1.5
+        captain_dict['multiplier'] = 1.5
+        
+        lineup_players.append(captain_dict)
+        remaining_salary -= captain_dict['salary']
+        available = available[available['name'] != captain['name']]
+        
+        # Pick 5 FLEX players
+        flex_pool = available[available['salary'] <= remaining_salary].copy()
+        flex_players = flex_pool.nlargest(5, 'composite_score')
+        
+        for _, player in flex_players.iterrows():
+            if len(lineup_players) >= 6:
+                break
+            if player['salary'] <= remaining_salary:
+                player_dict = player.to_dict()
+                player_dict['position'] = 'FLEX'
+                lineup_players.append(player_dict)
+                remaining_salary -= player['salary']
+        
+        if len(lineup_players) != 6:
+            return None
+        
+        total_proj = sum(p.get('projection', 0) for p in lineup_players)
+        total_own = np.mean([p.get('ownership', 10) for p in lineup_players])
+        total_salary = sum(p.get('salary', 0) for p in lineup_players)
+        
+        return {
+            'players': lineup_players,
+            'projection': total_proj,
+            'salary': total_salary,
+            'ownership': total_own,
+            'stacks': [],
+            'correlation_score': 0.0
+        }
+    
     def _calculate_composite_score(self, players: pd.DataFrame) -> pd.Series:
         """Calculate composite optimization score."""
         weights = {
@@ -1651,6 +1744,7 @@ class LineupOptimizer:
         
         return score
     
+    @timed(category='genetic_algorithm', track_memory=True)
     def _generate_genetic(self, num_lineups: int) -> List[Dict]:
         """Generate lineups using genetic algorithm v2."""
         population_size = min(100, num_lineups * 10)
@@ -2144,6 +2238,7 @@ class LineupOptimizer:
 # MAIN INTERFACE - Enhanced v6.2.0
 # ============================================================================
 
+@timed(category='optimization', track_memory=True)
 def optimize_lineups(
     player_pool: pd.DataFrame,
     num_lineups: int = 1,
