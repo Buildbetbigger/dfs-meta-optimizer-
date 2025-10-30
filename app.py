@@ -661,7 +661,7 @@ def main():
         
         # Initialize news monitor
         if 'news_monitor' not in st.session_state:
-            st.session_state.news_monitor = NewsFeedMonitor(player_df)
+            st.session_state.news_monitor = NewsFeedMonitor(players_df)
         
         news_monitor = st.session_state.news_monitor
         
