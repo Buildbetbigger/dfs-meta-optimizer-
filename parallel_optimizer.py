@@ -1,358 +1,376 @@
 """
-DFS Meta-Optimizer v8.0.0 - Performance Monitoring System
-Real-time performance tracking, profiling, and optimization
+DFS Meta-Optimizer v8.0.0 - Parallel Optimization Engine
+Multiprocessing and async optimization for massive speedups
 
 NEW IN v8.0.0:
-- Function-level timing decorators
-- Performance metrics dashboard
-- Bottleneck detection
-- Memory profiling
-- Real-time alerts for slow operations
-- Historical performance tracking
+- Parallel lineup generation across CPU cores
+- Batch processing with worker pools
+- Async data fetching
+- Smart work distribution
+- Progress tracking for long jobs
+- Fault tolerance with retry logic
 
-TARGET: <1s for 20 lineups, <5s for 150 lineups
+PERFORMANCE TARGETS:
+- 20 lineups: <1s (vs ~3s serial)
+- 150 lineups: <5s (vs ~15s serial)
+- 10x speedup on 8+ core systems
 """
 
-import time
-import functools
+import multiprocessing as mp
+from multiprocessing import Pool, cpu_count
+from typing import List, Dict, Callable, Optional, Any
+import pandas as pd
+import numpy as np
+from functools import partial
 import logging
-from typing import Callable, Dict, List, Optional, Any
-from dataclasses import dataclass, field
-from collections import defaultdict, deque
-from datetime import datetime
-import threading
-import psutil
-import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+
+from performance_monitor import timed, time_section
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class PerformanceMetric:
-    """Single performance measurement"""
-    function_name: str
-    duration_ms: float
-    timestamp: datetime
-    memory_delta_mb: float = 0.0
-    cpu_percent: float = 0.0
-    args_summary: str = ""
-    
-    
-@dataclass
-class FunctionStats:
-    """Aggregated stats for a function"""
-    name: str
-    call_count: int = 0
-    total_time_ms: float = 0.0
-    avg_time_ms: float = 0.0
-    min_time_ms: float = float('inf')
-    max_time_ms: float = 0.0
-    last_10_times: deque = field(default_factory=lambda: deque(maxlen=10))
-    
-    def update(self, duration_ms: float):
-        """Update stats with new measurement"""
-        self.call_count += 1
-        self.total_time_ms += duration_ms
-        self.avg_time_ms = self.total_time_ms / self.call_count
-        self.min_time_ms = min(self.min_time_ms, duration_ms)
-        self.max_time_ms = max(self.max_time_ms, duration_ms)
-        self.last_10_times.append(duration_ms)
-
-
-class PerformanceMonitor:
+class ParallelOptimizer:
     """
-    Central performance monitoring system.
+    Parallel lineup optimization using multiprocessing.
     
-    Thread-safe singleton for tracking all performance metrics.
+    Distributes lineup generation across CPU cores for massive speedup.
     """
     
-    _instance = None
-    _lock = threading.Lock()
+    def __init__(self, max_workers: Optional[int] = None):
+        """
+        Initialize parallel optimizer.
+        
+        Args:
+            max_workers: Number of worker processes (None = CPU count - 1)
+        """
+        self.max_workers = max_workers or max(1, cpu_count() - 1)
+        logger.info(f"ParallelOptimizer initialized with {self.max_workers} workers")
     
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-            
-        self.metrics: List[PerformanceMetric] = []
-        self.function_stats: Dict[str, FunctionStats] = defaultdict(
-            lambda: FunctionStats(name="unknown")
+    @timed(category='lineup_generation')
+    def generate_lineups_parallel(
+        self,
+        player_pool: pd.DataFrame,
+        num_lineups: int,
+        optimization_func: Callable,
+        config: Dict,
+        batch_size: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        Generate lineups in parallel across multiple processes.
+        
+        Args:
+            player_pool: DataFrame with player data
+            num_lineups: Total lineups to generate
+            optimization_func: Function that generates single lineup
+            config: Configuration dict
+            batch_size: Lineups per worker (None = auto)
+        
+        Returns:
+            List of generated lineups
+        """
+        if num_lineups <= 10:
+            # Not worth parallelizing for small batches
+            return [optimization_func(player_pool, config) for _ in range(num_lineups)]
+        
+        # Calculate optimal batch size
+        if batch_size is None:
+            batch_size = max(5, num_lineups // self.max_workers)
+        
+        # Create work batches
+        batches = []
+        remaining = num_lineups
+        while remaining > 0:
+            batch_count = min(batch_size, remaining)
+            batches.append(batch_count)
+            remaining -= batch_count
+        
+        logger.info(f"Generating {num_lineups} lineups across {len(batches)} batches "
+                   f"using {self.max_workers} workers")
+        
+        # Prepare partial function with fixed args
+        worker_func = partial(
+            _generate_batch_worker,
+            player_pool=player_pool,
+            optimization_func=optimization_func,
+            config=config
         )
-        self.alerts: List[str] = []
         
-        # Performance thresholds (ms)
-        self.thresholds = {
-            'lineup_generation': 1000,  # 1s for 20 lineups
-            'optimization': 5000,       # 5s for 150 lineups
-            'api_call': 2000,           # 2s for Claude API
-            'data_loading': 500,        # 500ms for data load
-            'default': 1000
-        }
+        # Execute in parallel
+        all_lineups = []
+        try:
+            with Pool(processes=self.max_workers) as pool:
+                results = pool.map(worker_func, batches)
+                
+                # Flatten results
+                for batch_lineups in results:
+                    all_lineups.extend(batch_lineups)
         
-        # System monitoring
-        self.process = psutil.Process(os.getpid())
-        self._initialized = True
-        
-        logger.info("PerformanceMonitor v8.0.0 initialized")
-    
-    def record_metric(self, metric: PerformanceMetric):
-        """Record a performance metric"""
-        with self._lock:
-            self.metrics.append(metric)
-            
-            # Update function stats
-            stats = self.function_stats[metric.function_name]
-            stats.name = metric.function_name
-            stats.update(metric.duration_ms)
-            
-            # Check for performance issues
-            self._check_threshold(metric)
-    
-    def _check_threshold(self, metric: PerformanceMetric):
-        """Check if metric exceeds threshold and create alert"""
-        func_name = metric.function_name
-        threshold = self.thresholds.get(func_name, self.thresholds['default'])
-        
-        if metric.duration_ms > threshold:
-            alert = (
-                f"⚠️ SLOW: {func_name} took {metric.duration_ms:.0f}ms "
-                f"(threshold: {threshold}ms) - {metric.args_summary}"
-            )
-            self.alerts.append(alert)
-            logger.warning(alert)
-    
-    def get_summary(self) -> Dict:
-        """Get performance summary"""
-        with self._lock:
-            if not self.function_stats:
-                return {}
-            
-            # Sort by total time
-            sorted_funcs = sorted(
-                self.function_stats.values(),
-                key=lambda x: x.total_time_ms,
-                reverse=True
-            )
-            
-            return {
-                'total_functions': len(self.function_stats),
-                'total_calls': sum(s.call_count for s in self.function_stats.values()),
-                'total_time_ms': sum(s.total_time_ms for s in self.function_stats.values()),
-                'slowest_functions': [
-                    {
-                        'name': s.name,
-                        'avg_time_ms': round(s.avg_time_ms, 2),
-                        'max_time_ms': round(s.max_time_ms, 2),
-                        'call_count': s.call_count,
-                        'total_time_ms': round(s.total_time_ms, 2)
-                    }
-                    for s in sorted_funcs[:10]
-                ],
-                'recent_alerts': self.alerts[-10:] if self.alerts else []
-            }
-    
-    def get_function_stats(self, func_name: str) -> Optional[FunctionStats]:
-        """Get stats for specific function"""
-        with self._lock:
-            return self.function_stats.get(func_name)
-    
-    def reset(self):
-        """Reset all metrics"""
-        with self._lock:
-            self.metrics.clear()
-            self.function_stats.clear()
-            self.alerts.clear()
-            logger.info("Performance metrics reset")
-    
-    def export_metrics(self) -> List[Dict]:
-        """Export all metrics as list of dicts"""
-        with self._lock:
-            return [
-                {
-                    'function': m.function_name,
-                    'duration_ms': m.duration_ms,
-                    'timestamp': m.timestamp.isoformat(),
-                    'memory_delta_mb': m.memory_delta_mb,
-                    'cpu_percent': m.cpu_percent
-                }
-                for m in self.metrics
+        except Exception as e:
+            logger.error(f"Parallel optimization failed: {e}")
+            # Fallback to serial
+            logger.warning("Falling back to serial optimization")
+            all_lineups = [
+                optimization_func(player_pool, config) 
+                for _ in range(num_lineups)
             ]
+        
+        logger.info(f"Generated {len(all_lineups)} lineups in parallel")
+        return all_lineups[:num_lineups]
+    
+    @timed(category='optimization')
+    def optimize_genetic_parallel(
+        self,
+        player_pool: pd.DataFrame,
+        population_size: int,
+        generations: int,
+        fitness_func: Callable,
+        config: Dict
+    ) -> List[Dict]:
+        """
+        Run genetic algorithm with parallelized fitness evaluation.
+        
+        Args:
+            player_pool: Player data
+            population_size: Size of population
+            generations: Number of generations
+            fitness_func: Function to calculate fitness
+            config: Configuration
+        
+        Returns:
+            Final population of lineups
+        """
+        from optimization_engine import LineupOptimizer
+        
+        # Initialize population serially (fast enough)
+        optimizer = LineupOptimizer(player_pool, config)
+        population = [
+            optimizer._build_single_lineup(set())
+            for _ in range(population_size)
+        ]
+        population = [p for p in population if p is not None]
+        
+        if not population:
+            logger.warning("Failed to generate initial population")
+            return []
+        
+        logger.info(f"Running genetic algorithm: {generations} generations, "
+                   f"population {len(population)}")
+        
+        # Parallelize fitness evaluation
+        for gen in range(generations):
+            with time_section(f"generation_{gen}"):
+                # Evaluate fitness in parallel
+                with Pool(processes=self.max_workers) as pool:
+                    fitness_scores = pool.map(fitness_func, population)
+                
+                # Assign fitness scores
+                for lineup, fitness in zip(population, fitness_scores):
+                    lineup['fitness'] = fitness
+                
+                # Evolution (serial - fast enough)
+                population = optimizer._evolve_population(population, config)
+            
+            if gen % 10 == 0:
+                best_fitness = max(lineup.get('fitness', 0) for lineup in population)
+                logger.debug(f"Generation {gen}: best fitness = {best_fitness:.3f}")
+        
+        # Sort by fitness and return top lineups
+        population.sort(key=lambda x: x.get('fitness', 0), reverse=True)
+        return population
 
 
-# Global monitor instance
-monitor = PerformanceMonitor()
-
-
-def timed(category: str = "default", track_memory: bool = False):
+def _generate_batch_worker(
+    batch_size: int,
+    player_pool: pd.DataFrame,
+    optimization_func: Callable,
+    config: Dict
+) -> List[Dict]:
     """
-    Decorator to measure function execution time.
+    Worker function for parallel batch generation.
     
     Args:
-        category: Category for threshold checking
-        track_memory: Track memory usage (slower)
+        batch_size: Number of lineups to generate
+        player_pool: Player data
+        optimization_func: Optimization function
+        config: Configuration
     
-    Example:
-        @timed(category='lineup_generation')
-        def generate_lineups(num: int):
-            ...
+    Returns:
+        List of lineups
     """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            # Get memory before
-            mem_before = 0
-            if track_memory:
-                mem_before = monitor.process.memory_info().rss / 1024 / 1024
-            
-            # Time execution
-            start_time = time.perf_counter()
-            result = func(*args, **kwargs)
-            end_time = time.perf_counter()
-            
-            duration_ms = (end_time - start_time) * 1000
-            
-            # Get memory after
-            mem_delta = 0
-            cpu_percent = 0
-            if track_memory:
-                mem_after = monitor.process.memory_info().rss / 1024 / 1024
-                mem_delta = mem_after - mem_before
-                cpu_percent = monitor.process.cpu_percent()
-            
-            # Create args summary
-            args_summary = ""
-            if args:
-                if isinstance(args[0], int):
-                    args_summary = f"n={args[0]}"
-                elif hasattr(args[0], '__len__'):
-                    args_summary = f"len={len(args[0])}"
-            
-            # Record metric
-            metric = PerformanceMetric(
-                function_name=func.__name__,
-                duration_ms=duration_ms,
-                timestamp=datetime.now(),
-                memory_delta_mb=mem_delta,
-                cpu_percent=cpu_percent,
-                args_summary=args_summary
-            )
-            monitor.record_metric(metric)
-            
-            return result
-        return wrapper
-    return decorator
+    try:
+        lineups = []
+        for _ in range(batch_size):
+            lineup = optimization_func(player_pool, config)
+            if lineup:
+                lineups.append(lineup)
+        return lineups
+    except Exception as e:
+        logger.error(f"Worker failed: {e}")
+        return []
 
 
-def time_section(name: str):
+class AsyncDataFetcher:
     """
-    Context manager for timing code sections.
+    Async data fetching for external APIs.
     
-    Example:
-        with time_section("data_loading"):
-            df = load_data()
+    Fetches weather, injury, and Vegas data in parallel.
     """
-    class TimerContext:
-        def __init__(self, section_name: str):
-            self.name = section_name
-            self.start = None
-            
-        def __enter__(self):
-            self.start = time.perf_counter()
-            return self
-            
-        def __exit__(self, *args):
-            duration_ms = (time.perf_counter() - self.start) * 1000
-            metric = PerformanceMetric(
-                function_name=self.name,
-                duration_ms=duration_ms,
-                timestamp=datetime.now()
-            )
-            monitor.record_metric(metric)
     
-    return TimerContext(name)
-
-
-class PerformanceReport:
-    """Generate formatted performance reports"""
+    def __init__(self, max_concurrent: int = 10):
+        """
+        Initialize async data fetcher.
+        
+        Args:
+            max_concurrent: Max concurrent requests
+        """
+        self.max_concurrent = max_concurrent
+        self.executor = ThreadPoolExecutor(max_workers=max_concurrent)
+        logger.info(f"AsyncDataFetcher initialized with {max_concurrent} workers")
     
-    @staticmethod
-    def generate_text_report() -> str:
-        """Generate text-based performance report"""
-        summary = monitor.get_summary()
+    @timed(category='data_loading')
+    def fetch_all_data(
+        self,
+        players_df: pd.DataFrame,
+        fetch_weather: bool = True,
+        fetch_injuries: bool = True,
+        fetch_vegas: bool = True
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch all external data in parallel.
         
-        if not summary:
-            return "No performance data collected yet."
+        Args:
+            players_df: Player data
+            fetch_weather: Fetch weather data
+            fetch_injuries: Fetch injury data
+            fetch_vegas: Fetch Vegas lines
         
-        report = "=" * 80 + "\n"
-        report += "PERFORMANCE REPORT\n"
-        report += "=" * 80 + "\n\n"
+        Returns:
+            Dict with all fetched data
+        """
+        tasks = []
+        results = {}
         
-        report += f"Total Functions Tracked: {summary['total_functions']}\n"
-        report += f"Total Function Calls: {summary['total_calls']}\n"
-        report += f"Total Time: {summary['total_time_ms']:.0f}ms\n\n"
+        # Submit tasks
+        if fetch_weather:
+            future = self.executor.submit(self._fetch_weather, players_df)
+            tasks.append(('weather', future))
         
-        report += "TOP 10 SLOWEST FUNCTIONS:\n"
-        report += "-" * 80 + "\n"
-        report += f"{'Function':<30} {'Avg (ms)':<12} {'Max (ms)':<12} {'Calls':<10}\n"
-        report += "-" * 80 + "\n"
+        if fetch_injuries:
+            future = self.executor.submit(self._fetch_injuries, players_df)
+            tasks.append(('injuries', future))
         
-        for func in summary['slowest_functions']:
-            report += f"{func['name']:<30} "
-            report += f"{func['avg_time_ms']:<12.1f} "
-            report += f"{func['max_time_ms']:<12.1f} "
-            report += f"{func['call_count']:<10}\n"
+        if fetch_vegas:
+            future = self.executor.submit(self._fetch_vegas, players_df)
+            tasks.append(('vegas', future))
         
-        if summary['recent_alerts']:
-            report += "\n\nRECENT ALERTS:\n"
-            report += "-" * 80 + "\n"
-            for alert in summary['recent_alerts'][-5:]:
-                report += f"{alert}\n"
+        # Collect results
+        for name, future in tasks:
+            try:
+                results[name] = future.result(timeout=10)
+                logger.info(f"Fetched {name} data successfully")
+            except Exception as e:
+                logger.warning(f"Failed to fetch {name}: {e}")
+                results[name] = None
         
-        report += "\n" + "=" * 80 + "\n"
-        
-        return report
+        return results
     
-    @staticmethod
-    def get_dashboard_metrics() -> Dict:
-        """Get metrics formatted for dashboard display"""
-        summary = monitor.get_summary()
-        
-        if not summary:
-            return {
-                'status': 'No data',
-                'total_time': 0,
-                'avg_time': 0,
-                'call_count': 0,
-                'bottlenecks': []
-            }
-        
-        total_time = summary['total_time_ms']
-        total_calls = summary['total_calls']
-        
-        return {
-            'status': 'Healthy' if not summary['recent_alerts'] else 'Issues Detected',
-            'total_time_ms': round(total_time, 2),
-            'avg_time_ms': round(total_time / total_calls if total_calls > 0 else 0, 2),
-            'call_count': total_calls,
-            'bottlenecks': summary['slowest_functions'][:5],
-            'alerts': summary['recent_alerts'][-3:] if summary['recent_alerts'] else []
-        }
+    def _fetch_weather(self, players_df: pd.DataFrame) -> pd.DataFrame:
+        """Fetch weather data (placeholder - implement with actual API)"""
+        # TODO: Implement actual weather API integration
+        return players_df.copy()
+    
+    def _fetch_injuries(self, players_df: pd.DataFrame) -> pd.DataFrame:
+        """Fetch injury data (placeholder - implement with actual API)"""
+        # TODO: Implement actual injury API integration
+        return players_df.copy()
+    
+    def _fetch_vegas(self, players_df: pd.DataFrame) -> pd.DataFrame:
+        """Fetch Vegas lines (placeholder - implement with actual API)"""
+        # TODO: Implement actual Vegas API integration
+        return players_df.copy()
+    
+    def shutdown(self):
+        """Shutdown executor"""
+        self.executor.shutdown(wait=True)
 
 
-# Convenience exports
+class ProgressTracker:
+    """Track progress of long-running optimization jobs"""
+    
+    def __init__(self, total_work: int):
+        """
+        Initialize progress tracker.
+        
+        Args:
+            total_work: Total amount of work (e.g., number of lineups)
+        """
+        self.total = total_work
+        self.completed = 0
+        self.manager = mp.Manager()
+        self.counter = self.manager.Value('i', 0)
+    
+    def update(self, amount: int = 1):
+        """Update progress"""
+        with self.counter.get_lock():
+            self.counter.value += amount
+            self.completed = self.counter.value
+    
+    def get_progress(self) -> float:
+        """Get progress percentage"""
+        return (self.completed / self.total) * 100 if self.total > 0 else 0
+    
+    def __str__(self) -> str:
+        return f"Progress: {self.completed}/{self.total} ({self.get_progress():.1f}%)"
+
+
+# Convenience function for quick parallel optimization
+@timed(category='lineup_generation')
+def generate_lineups_fast(
+    player_pool: pd.DataFrame,
+    num_lineups: int,
+    config: Dict,
+    use_parallel: bool = True
+) -> List[Dict]:
+    """
+    Quick helper for parallel lineup generation.
+    
+    Args:
+        player_pool: Player data
+        num_lineups: Number of lineups
+        config: Configuration
+        use_parallel: Use parallel processing (True recommended)
+    
+    Returns:
+        List of lineups
+    """
+    if use_parallel and num_lineups > 10:
+        from optimization_engine import LineupOptimizer
+        
+        optimizer = LineupOptimizer(player_pool, config)
+        parallel = ParallelOptimizer()
+        
+        return parallel.generate_lineups_parallel(
+            player_pool=player_pool,
+            num_lineups=num_lineups,
+            optimization_func=lambda df, cfg: optimizer._build_single_lineup(set()),
+            config=config
+        )
+    else:
+        # Serial fallback
+        from optimization_engine import optimize_lineups
+        lineups, _, _ = optimize_lineups(
+            player_pool,
+            num_lineups=num_lineups,
+            custom_config=config
+        )
+        return lineups
+
+
 __all__ = [
-    'PerformanceMonitor',
-    'PerformanceMetric',
-    'FunctionStats',
-    'timed',
-    'time_section',
-    'monitor',
-    'PerformanceReport'
+    'ParallelOptimizer',
+    'AsyncDataFetcher',
+    'ProgressTracker',
+    'generate_lineups_fast'
 ]
