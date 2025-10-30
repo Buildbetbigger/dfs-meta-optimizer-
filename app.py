@@ -51,7 +51,7 @@ import numpy as np
 from typing import Dict, List, Optional
 import sys
 from pathlib import Path
-from contest_selector import ContestSelector, Contest, CONTEST_PRESETS, ContestPreset
+from contest_selector import ContestPreset
 
 sys.path.insert(0, str(Path(__file__).parent))
 
