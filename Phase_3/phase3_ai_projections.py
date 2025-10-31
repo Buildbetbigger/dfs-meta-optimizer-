@@ -60,7 +60,7 @@ class AIProjectionEngine:
             self.claude = ClaudeAssistant(api_key=anthropic_api_key)
         else:
             self.claude = None
-            logger.warning("⚠️ Claude AI not available - projections will use fallback")
+            logger.warning("[!] Claude AI not available - projections will use fallback")
         
         self.model = "claude-sonnet-4-20250514"
         
@@ -149,7 +149,7 @@ class AIProjectionEngine:
             low_value = enhanced['Value'] < enhanced['Value'].quantile(0.25)
             enhanced.loc[low_value, 'Projection'] *= 0.95
         
-        logger.info("✅ Applied fallback projection adjustments")
+        logger.info("[OK] Applied fallback projection adjustments")
         return enhanced
     
     def _process_batch(
@@ -522,9 +522,9 @@ Return JSON with:
         avg_correlation = np.mean([x['correlation'] for x in recent])
         
         report = f"""
-â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-â•‘           AI PROJECTION ACCURACY REPORT                 â•‘
-â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+â*”â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*—
+â*‘           AI PROJECTION ACCURACY REPORT                 â*‘
+â*šâ*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
 
 Recent Performance (Last 5 Slates):
   Average MAE: {avg_mae:.2f} points
