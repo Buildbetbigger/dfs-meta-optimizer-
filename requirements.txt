@@ -1,32 +1,32 @@
-# DFS Meta-Optimizer v7.0.1 Requirements
-# Last Updated: October 29, 2025
+# DFS Meta-Optimizer v8.0.0 - Requirements
+# ==========================================
 
-# Core Framework
-streamlit>=1.28.0
-
-# Data Processing
+# CORE DEPENDENCIES (Required)
 pandas>=2.0.0
 numpy>=1.24.0
+streamlit>=1.28.0
 
-# AI Integration
-anthropic>=0.25.0
+# AI FEATURES (Optional - Phase 3)
+anthropic>=0.34.0          # Claude AI integration
 
-# Optimization Algorithms
-scipy>=1.10.0
-pulp>=2.7.0
+# ADVANCED MATH (Optional - Phase 2)
+scipy>=1.10.0              # Statistical functions
 
-# Visualization
-plotly>=5.14.0
+# API INTEGRATIONS (Optional)
+requests>=2.31.0           # HTTP requests
+python-dotenv>=1.0.0       # Environment variables
+schedule>=1.2.0            # Job scheduling (phase3_scheduler)
 
-# API & Web
-requests>=2.31.0
+# PERFORMANCE (Optional)
+psutil>=5.9.0              # System monitoring
 
-# Configuration
-python-dotenv>=1.0.0
+# DEVELOPMENT (Optional)
+pytest>=7.4.0              # Testing
+black>=23.0.0              # Code formatting
+mypy>=1.5.0                # Type checking
 
-# Date/Time Handling
-python-dateutil>=2.8.0
-pytz>=2023.3
-
-# Web Scraping (NEW in v7.0.1 - for injury data)
-beautifulsoup4>=4.12.0
+# Notes:
+# - anthropic required for AI-powered projections
+# - Without anthropic, system falls back to standard projections
+# - scipy required for Sharpe optimization & Bayesian tuning
+# - All modules have graceful fallbacks if optional deps missing
