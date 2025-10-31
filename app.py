@@ -56,11 +56,98 @@ from contest_selector import ContestPreset
 sys.path.insert(0, str(Path(__file__).parent))
 
 def fix_csv_columns(df):
-    """COMPLETE version - handles blanks"""
+    """
+    Comprehensive CSV column fixer for all DFS platforms.
+    Handles DraftKings, FanDuel, Yahoo, and custom formats.
+    
+    Normalizes column names to standard format:
+    - name, position, salary, team, projection, ownership
+    """
+    df = df.copy()
+    
+    # Column mappings for common DFS platforms
+    mappings = {
+        'projection': [
+            'projection', 'proj', 'fpts_proj', 'fpts', 'projected_points',
+            'fantasy_points', 'fp', 'points', 'projected_fp', 'avg_points',
+            'avgpointspergame', 'fppg', 'fpts proj', 'fantasy_points_draftkings'
+        ],
+        'salary': [
+            'salary', 'sal', 'cost', 'price', 'Salary'
+        ],
+        'name': [
+            'name', 'player', 'player_name', 'full_name', 'Name', 'Player', 'nickname'
+        ],
+        'position': [
+            'position', 'pos', 'positions', 'Position', 'Pos', 'roster_position', 'roster position'
+        ],
+        'team': [
+            'team', 'tm', 'team_abbr', 'Team', 'TeamAbbrev', 'teamabbrev'
+        ],
+        'opponent': [
+            'opponent', 'opp', 'vs', 'against', 'Opponent', 'Opp', 'game info'
+        ],
+        'ownership': [
+            'ownership', 'own', 'ownership_pct', 'projected_ownership', 'Own%', 'own%'
+        ]
+    }
+    
+    # Create lowercase column lookup
+    col_lower = {col: col.lower().strip().replace(' ', '_') for col in df.columns}
+    
+    # Map each standard column
+    for standard, variations in mappings.items():
+        variations_lower = [v.lower().strip().replace(' ', '_') for v in variations]
+        for original_col, lower_col in col_lower.items():
+            if lower_col in variations_lower:
+                if original_col != standard:
+                    df = df.rename(columns={original_col: standard})
+                break
+    
+    # Handle first_name + last_name combination
     if 'first_name' in df.columns and 'last_name' in df.columns:
-        df['name'] = (df['first_name'].fillna('') + ' ' +
-                      df['last_name'].fillna('')).str.strip()
-        df = df.drop(columns=['first_name', 'last_name'])
+        df['name'] = (df['first_name'].fillna('') + ' ' + 
+                     df['last_name'].fillna('')).str.strip()
+        df = df.drop(columns=['first_name', 'last_name'], errors='ignore')
+    
+    # Create required columns if missing
+    if 'projection' not in df.columns:
+        # Try to find any numeric column that might be projections
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
+        found = False
+        for col in numeric_cols:
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in ['point', 'proj', 'fp', 'pts', 'fantasy']):
+                df['projection'] = df[col]
+                found = True
+                break
+        if not found:
+            df['projection'] = 0.0
+    
+    if 'salary' not in df.columns:
+        df['salary'] = 3000
+    
+    if 'name' not in df.columns:
+        df['name'] = 'Unknown Player'
+    
+    if 'position' not in df.columns:
+        df['position'] = 'FLEX'
+    
+    if 'team' not in df.columns:
+        df['team'] = 'UNK'
+    
+    if 'ownership' not in df.columns:
+        df['ownership'] = 0.0
+    
+    # Calculate value if not present
+    if 'value' not in df.columns:
+        df['value'] = (df['projection'] / df['salary'].replace(0, 1) * 1000).round(2)
+    
+    # Clean numeric columns
+    for col in ['projection', 'salary', 'ownership', 'value']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
     return df
 
 try:
