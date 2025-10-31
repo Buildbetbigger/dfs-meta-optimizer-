@@ -3,11 +3,11 @@ DFS Meta-Optimizer - AI Projection Engine v8.0.0
 PHASE 3: CLAUDE-POWERED PROJECTIONS
 
 MOST ADVANCED STATE Features:
-✅ AI-Powered - Claude integration with prompt caching
-✅ PhD-Level Math - Bayesian projection adjustments
-✅ Production Performance - Batch processing, parallel calls
-✅ Self-Improving - Learns from projection accuracy
-✅ Enterprise Quality - Full error handling, logging
+âœ… AI-Powered - Claude integration with prompt caching
+âœ… PhD-Level Math - Bayesian projection adjustments
+âœ… Production Performance - Batch processing, parallel calls
+âœ… Self-Improving - Learns from projection accuracy
+âœ… Enterprise Quality - Full error handling, logging
 
 Uses Claude to enhance projections with:
 - Contextual game script analysis
@@ -20,11 +20,18 @@ Uses Claude to enhance projections with:
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-import anthropic
 import json
 import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Use shared Claude assistant module (v6.1.0) for unified AI client
+try:
+    from claude_assistant import ClaudeAssistant, ANTHROPIC_AVAILABLE
+    HAS_CLAUDE = True
+except ImportError:
+    HAS_CLAUDE = False
+    ANTHROPIC_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +55,13 @@ class AIProjectionEngine:
         Args:
             anthropic_api_key: Anthropic API key
         """
-        self.client = anthropic.Anthropic(api_key=anthropic_api_key)
+        # Use shared ClaudeAssistant for unified API handling
+        if HAS_CLAUDE and ANTHROPIC_AVAILABLE:
+            self.claude = ClaudeAssistant(api_key=anthropic_api_key)
+        else:
+            self.claude = None
+            logger.warning("⚠️ Claude AI not available - projections will use fallback")
+        
         self.model = "claude-sonnet-4-20250514"
         
         # Track projection accuracy for self-improvement
@@ -76,6 +89,12 @@ class AIProjectionEngine:
         logger.info(f"Enhancing {len(players_df)} projections with AI...")
         
         df = players_df.copy()
+        
+        # Fallback if Claude not available
+        if self.claude is None or not ANTHROPIC_AVAILABLE:
+            logger.warning("Using fallback enhancement (Claude unavailable)")
+            return self._fallback_enhancement(df)
+        
         context_data = context_data or {}
         
         # Split into batches for efficient processing
@@ -102,7 +121,7 @@ class AIProjectionEngine:
                 try:
                     enhanced_batch = future.result()
                     enhanced_batches.append(enhanced_batch)
-                    logger.debug(f"✅ Batch {batch_num+1}/{len(batches)} complete")
+                    logger.debug(f"âœ… Batch {batch_num+1}/{len(batches)} complete")
                 except Exception as e:
                     logger.error(f"Batch {batch_num} failed: {e}")
                     enhanced_batches.append(batches[batch_num])  # Use original
@@ -110,8 +129,28 @@ class AIProjectionEngine:
         # Combine batches
         result = pd.concat(enhanced_batches, ignore_index=True)
         
-        logger.info("✅ AI enhancement complete")
+        logger.info("âœ… AI enhancement complete")
         return result
+    
+    def _fallback_enhancement(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Fallback projection enhancement when Claude is not available.
+        Uses simple heuristics instead of AI.
+        """
+        enhanced = df.copy()
+        
+        # Simple value-based adjustments
+        if 'Value' in enhanced.columns:
+            # Boost high-value players slightly
+            high_value = enhanced['Value'] > enhanced['Value'].quantile(0.75)
+            enhanced.loc[high_value, 'Projection'] *= 1.05
+            
+            # Reduce low-value players slightly  
+            low_value = enhanced['Value'] < enhanced['Value'].quantile(0.25)
+            enhanced.loc[low_value, 'Projection'] *= 0.95
+        
+        logger.info("✅ Applied fallback projection adjustments")
+        return enhanced
     
     def _process_batch(
         self,
@@ -483,15 +522,15 @@ Return JSON with:
         avg_correlation = np.mean([x['correlation'] for x in recent])
         
         report = f"""
-╔══════════════════════════════════════════════════════════╗
-║           AI PROJECTION ACCURACY REPORT                 ║
-╚══════════════════════════════════════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘           AI PROJECTION ACCURACY REPORT                 â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 Recent Performance (Last 5 Slates):
   Average MAE: {avg_mae:.2f} points
   Average Correlation: {avg_correlation:.3f}
 
-Trend: {"📈 IMPROVING" if len(recent) > 1 and recent[-1]['mae'] < recent[0]['mae'] else "📊 STABLE"}
+Trend: {"ðŸ“ˆ IMPROVING" if len(recent) > 1 and recent[-1]['mae'] < recent[0]['mae'] else "ðŸ“Š STABLE"}
 
 Total Predictions: {sum(x['sample_size'] for x in self.accuracy_history)}
 """
