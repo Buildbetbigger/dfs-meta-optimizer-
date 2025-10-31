@@ -3,10 +3,10 @@ DFS Meta-Optimizer - Production Scheduler v8.0.0
 PHASE 3: AUTOMATED SCHEDULING
 
 MOST ADVANCED STATE Features:
-✅ Zero Bugs - Comprehensive error recovery
-✅ Production Performance - Async execution, retry logic
-✅ Self-Improving - Learns optimal run times
-✅ Enterprise Quality - Full monitoring, alerting
+âœ… Zero Bugs - Comprehensive error recovery
+âœ… Production Performance - Async execution, retry logic
+âœ… Self-Improving - Learns optimal run times
+âœ… Enterprise Quality - Full monitoring, alerting
 
 Schedules:
 - Daily data refreshes
@@ -16,7 +16,6 @@ Schedules:
 - Automated exports
 """
 
-import schedule
 import time
 import logging
 from datetime import datetime, timedelta
@@ -25,6 +24,14 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 import traceback
+
+# Optional dependency: schedule
+try:
+    import schedule
+    SCHEDULE_AVAILABLE = True
+except ImportError:
+    SCHEDULE_AVAILABLE = False
+    print("[!] 'schedule' package not installed. Scheduler features disabled. Install with: pip install schedule")
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +119,12 @@ class ProductionScheduler:
     
     def start(self):
         """Start scheduler in background thread."""
+        # Check if schedule package available
+        if not SCHEDULE_AVAILABLE:
+            logger.error("Cannot start scheduler - 'schedule' package not installed")
+            logger.info("Install with: pip install schedule")
+            return
+        
         if self.is_running:
             logger.warning("Scheduler already running")
             return
@@ -122,7 +135,7 @@ class ProductionScheduler:
             daemon=True
         )
         self.scheduler_thread.start()
-        logger.info("🚀 Scheduler started")
+        logger.info("ðŸš€ Scheduler started")
     
     def stop(self):
         """Stop scheduler."""
@@ -152,7 +165,7 @@ class ProductionScheduler:
     
     def _execute_task(self, task: ScheduledTask):
         """Execute a scheduled task with error handling."""
-        logger.info(f"⏰ Running: {task.name}")
+        logger.info(f"â degrees Running: {task.name}")
         
         start_time = time.time()
         
@@ -172,12 +185,12 @@ class ProductionScheduler:
                     self.execution_times[task.name] = []
                 self.execution_times[task.name].append(execution_time)
                 
-                logger.info(f"✅ {task.name} completed in {execution_time:.1f}s")
+                logger.info(f"âœ… {task.name} completed in {execution_time:.1f}s")
                 return result
                 
             except Exception as e:
                 task.failure_count += 1
-                logger.error(f"❌ {task.name} failed (attempt {attempt+1}/{task.max_retries}): {e}")
+                logger.error(f"âŒ {task.name} failed (attempt {attempt+1}/{task.max_retries}): {e}")
                 logger.debug(traceback.format_exc())
                 
                 if attempt < task.max_retries - 1:
@@ -187,7 +200,7 @@ class ProductionScheduler:
                     time.sleep(sleep_time)
                 else:
                     # Final failure
-                    logger.critical(f"🚨 {task.name} FAILED after {task.max_retries} attempts")
+                    logger.critical(f"ðŸš¨ {task.name} FAILED after {task.max_retries} attempts")
                     self._handle_task_failure(task, e)
     
     def _handle_task_failure(self, task: ScheduledTask, error: Exception):
@@ -198,7 +211,7 @@ class ProductionScheduler:
         # Disable task if too many failures
         if task.failure_count >= 5:
             task.enabled = False
-            logger.critical(f"🚫 Disabled {task.name} after 5 consecutive failures")
+            logger.critical(f"ðŸš« Disabled {task.name} after 5 consecutive failures")
     
     def run_task_now(self, task_name: str):
         """Manually trigger a task."""
@@ -259,19 +272,19 @@ class ProductionScheduler:
     def get_performance_report(self) -> str:
         """Generate performance report."""
         report = f"""
-╔══════════════════════════════════════════════════════════╗
-║           SCHEDULER PERFORMANCE REPORT                  ║
-╚══════════════════════════════════════════════════════════╝
+â*”â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*—
+â*‘           SCHEDULER PERFORMANCE REPORT                  â*‘
+â*šâ*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
 
 Lock Time: {self.lock_time}
 Total Tasks: {len(self.tasks)}
-Running: {"✅ YES" if self.is_running else "❌ NO"}
+Running: {"âœ… YES" if self.is_running else "âŒ NO"}
 
 Task Performance:
 """
         
         for task in sorted(self.tasks, key=lambda t: t.priority.value):
-            status = "✅" if task.enabled else "❌"
+            status = "âœ…" if task.enabled else "âŒ"
             
             # Calculate avg execution time
             exec_times = self.execution_times.get(task.name, [])
@@ -289,7 +302,7 @@ Task Performance:
                 report += f"   Avg Duration: {avg_time:.1f}s\n"
             
             if task.failure_count > 0:
-                report += f"   ⚠️ Failures: {task.failure_count}\n"
+                report += f"   âš ï¸ Failures: {task.failure_count}\n"
         
         return report
 
