@@ -729,7 +729,7 @@ def main():
         return
     
     with st.expander(" Player Pool Preview"):
-        st.dataframe(players_df.head(10), use_container_width=True)
+        st.dataframe(players_df, use_container_width=True)
     
     # ============================================================================
     # v6.3.0: REAL-TIME DATA INTEGRATION
