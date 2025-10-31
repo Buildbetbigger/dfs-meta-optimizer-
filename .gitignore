@@ -1,19 +1,6 @@
 # DFS Meta-Optimizer .gitignore
-# Prevents committing sensitive and unnecessary files
 
-# ==========================================
-# CRITICAL: API Keys & Secrets
-# ==========================================
-.env
-.env.local
-.env.*.local
-*.key
-secrets.txt
-config_local.py
-
-# ==========================================
-# Python Cache & Compiled Files
-# ==========================================
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,95 +18,106 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# ==========================================
-# Virtual Environments
-# ==========================================
+# Virtual Environment
 venv/
-env/
 ENV/
-env.bak/
-venv.bak/
+env/
+.venv
 
-# ==========================================
-# IDE & Editor Files
-# ==========================================
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.project
-.pydevproject
-.settings/
+.DS_Store
 
-# ==========================================
-# Streamlit Cache
-# ==========================================
-.streamlit/
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
 
-# ==========================================
-# Data Files (Don't commit user data!)
-# ==========================================
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets.toml
+.streamlit/secrets.toml
+
+# API Keys & Credentials
+*_api_key*
+*_secret*
+credentials.json
+
+# Data Files (keep example data, ignore real data)
 data/*.csv
-data/*.xlsx
-data/*.xls
-*.csv
-*.xlsx
-*.xls
-# But keep example files if you create them
+data/*.json
 !data/example_*.csv
-!data/sample_*.csv
+!data/example_*.json
+*.db
+*.sqlite
 
-# ==========================================
-# Logs & Debug Files
-# ==========================================
+# Lineups & Outputs
+lineups_*.csv
+output_*.csv
+exports/
+outputs/
+results/
+
+# Logs
 *.log
 logs/
 *.log.*
-debug.txt
 
-# ==========================================
-# OS Files
-# ==========================================
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# ==========================================
-# Test & Backup Files
-# ==========================================
-test_*.py
-*_backup.py
-*_old.py
-*.bak
-temp/
-tmp/
-
-# ==========================================
-# Jupyter Notebooks (if you use them)
-# ==========================================
-.ipynb_checkpoints/
-*.ipynb
-
-# ==========================================
-# Coverage & Testing
-# ==========================================
+# Testing
+.tox/
 .coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
 .pytest_cache/
-htmlcov/
 
-# Streamlit secrets
-.streamlit/secrets.toml
-.streamlit/
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Environment files
-.env
-*.env
+# Profiling
+*.prof
+
+# Documentation builds
+docs/_build/
+site/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS specific
+Thumbs.db
+.DS_Store
+.directory
+
+# Project specific
+*.bak
+*.backup
+player_pool_*.csv
+contest_data_*.json
+historical_results/
+
+# Don't ignore
+!.gitignore
+!.env.example
+!requirements.txt
