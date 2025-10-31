@@ -1,0 +1,32 @@
+# Manifest for package distribution
+# Include additional files beyond Python modules
+
+# Documentation
+include README.md
+include LICENSE
+include CHANGELOG.md
+include INTEGRATION_GUIDE.md
+include FIX_SUMMARY.md
+include CONTRIBUTING.md
+include GITHUB_SETUP.md
+
+# Configuration
+include requirements.txt
+include .env.example
+include setup.py
+
+# Data files (examples only)
+recursive-include data *.csv
+recursive-include data *.json
+exclude data/*_real_*.csv
+exclude data/*_personal_*.json
+
+# Tests
+recursive-include tests *.py
+
+# Exclude
+exclude .gitignore
+exclude .env
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .DS_Store
