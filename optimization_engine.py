@@ -56,11 +56,14 @@ from collections import defaultdict, Counter
 import logging
 from copy import deepcopy
 
+# Initialize logger FIRST (before any usage)
+logger = logging.getLogger(__name__)
+
 # v8.0.0: Performance monitoring integration
 try:
     from performance_monitor import timed, time_section
     PERFORMANCE_MONITORING_AVAILABLE = True
-    logger.info("✅ Performance monitoring enabled")
+    logger.info("âœ… Performance monitoring enabled")
 except ImportError:
     # Fallback no-op decorator if module not available
     def timed(category='default', track_memory=False):
@@ -68,9 +71,8 @@ except ImportError:
             return func
         return decorator
     PERFORMANCE_MONITORING_AVAILABLE = False
-    logger.warning("⚠️ Performance monitoring not available")
+    logger.warning("âš ï¸ Performance monitoring not available")
 
-logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -382,7 +384,7 @@ class ExposureManager:
                 'Count': int((exp_pct / 100) * len(lineups)),
                 'Salary': int(player_info['salary']),
                 'Projection': round(float(player_info['projection']), 1),
-                'Compliant': 'âœ“' if is_compliant else 'âœ—'
+                'Compliant': 'Ã¢Å“â€œ' if is_compliant else 'Ã¢Å“â€”'
             })
         
         return pd.DataFrame(report_data)
@@ -908,7 +910,7 @@ class LineupFilter:
                 logger.warning(f"All lineups filtered out at filter: {filter_type}")
                 break
         
-        logger.info(f"Batch filtering: {len(lineups)} â†’ {len(filtered)} lineups")
+        logger.info(f"Batch filtering: {len(lineups)} Ã¢â€ â€™ {len(filtered)} lineups")
         return filtered
 
 
@@ -2312,4 +2314,25 @@ if __name__ == '__main__':
     )
     
     print(f"\nGenerated {len(lineups)} lineups")
-    print(f"Exposure compliance: {exposure_report['compliance']['compliant']}")
+
+
+# ==============================================================================
+# COMPATIBILITY ALIASES
+# ==============================================================================
+
+# Alias for backward compatibility with other modules
+PortfolioOptimizer = LineupOptimizer
+
+# Export main classes
+__all__ = [
+    'LineupOptimizer',
+    'PortfolioOptimizer',  # Alias
+    'ExposureRule',
+    'ExposureManager',
+    'OwnershipTracker',
+    'LineupFilter',
+    'ContestPreset',
+    'CorrelationMatrix',
+    'StackAnalyzer',
+    'optimize_lineups'
+]
