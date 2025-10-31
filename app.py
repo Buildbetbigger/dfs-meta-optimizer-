@@ -57,89 +57,84 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def fix_csv_columns(df):
     """
-    Comprehensive CSV column fixer for all DFS platforms.
-    Handles DraftKings, FanDuel, Yahoo, and custom formats.
-    
-    Normalizes column names to standard format:
-    - name, position, salary, team, projection, ownership
+    Enhanced CSV fixer - handles Classic AND Showdown formats.
+    Detects format automatically.
     """
+    import pandas as pd
+    
     df = df.copy()
     
-    # Column mappings for common DFS platforms
+    # Detect if Showdown format (2 teams only, typically)
+    is_showdown = False
+    if 'team' in df.columns:
+        unique_teams = df['team'].nunique()
+        if unique_teams == 2:
+            is_showdown = True
+    
+    # Column mappings for various DFS platforms
     mappings = {
         'projection': [
             'projection', 'proj', 'fpts_proj', 'fpts', 'projected_points',
             'fantasy_points', 'fp', 'points', 'projected_fp', 'avg_points',
-            'avgpointspergame', 'fppg', 'fpts proj', 'fantasy_points_draftkings'
+            'avgpointspergame', 'fppg', 'fpts proj'
         ],
-        'salary': [
-            'salary', 'sal', 'cost', 'price', 'Salary'
-        ],
-        'name': [
-            'name', 'player', 'player_name', 'full_name', 'Name', 'Player', 'nickname'
-        ],
-        'position': [
-            'position', 'pos', 'positions', 'Position', 'Pos', 'roster_position', 'roster position'
-        ],
-        'team': [
-            'team', 'tm', 'team_abbr', 'Team', 'TeamAbbrev', 'teamabbrev'
-        ],
-        'opponent': [
-            'opponent', 'opp', 'vs', 'against', 'Opponent', 'Opp', 'game info'
-        ],
-        'ownership': [
-            'ownership', 'own', 'ownership_pct', 'projected_ownership', 'Own%', 'own%'
-        ]
+        'salary': ['salary', 'sal', 'cost', 'price', 'Salary'],
+        'name': ['name', 'player', 'player_name', 'full_name', 'Name', 'Player'],
+        'position': ['position', 'pos', 'positions', 'Position', 'Pos', 'roster_position'],
+        'team': ['team', 'tm', 'team_abbr', 'Team', 'TeamAbbrev']
     }
     
-    # Create lowercase column lookup
-    col_lower = {col: col.lower().strip().replace(' ', '_') for col in df.columns}
+    # Normalize column names
+    col_lower = {col: col.lower().strip() for col in df.columns}
     
-    # Map each standard column
     for standard, variations in mappings.items():
-        variations_lower = [v.lower().strip().replace(' ', '_') for v in variations]
-        for original_col, lower_col in col_lower.items():
-            if lower_col in variations_lower:
-                if original_col != standard:
-                    df = df.rename(columns={original_col: standard})
+        for orig_col, lower_col in col_lower.items():
+            if lower_col in [v.lower() for v in variations]:
+                if orig_col != standard:
+                    df = df.rename(columns={orig_col: standard})
                 break
     
-    # Handle first_name + last_name combination
+    # Handle first_name + last_name
     if 'first_name' in df.columns and 'last_name' in df.columns:
         df['name'] = (df['first_name'].fillna('') + ' ' + 
                      df['last_name'].fillna('')).str.strip()
         df = df.drop(columns=['first_name', 'last_name'], errors='ignore')
     
-    # Create required columns if missing
+    # Create missing required columns
     if 'projection' not in df.columns:
-        # Try to find any numeric column that might be projections
-        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-        found = False
-        for col in numeric_cols:
-            col_lower = col.lower()
-            if any(kw in col_lower for kw in ['point', 'proj', 'fp', 'pts', 'fantasy']):
-                df['projection'] = df[col]
-                found = True
-                break
-        if not found:
-            df['projection'] = 0.0
+        df['projection'] = 0.0
+    
+    # Fix zero projections for high-salary players (likely data error)
+    if 'salary' in df.columns:
+        # If player has high salary but 0 projection, estimate from salary
+        zero_proj_high_sal = (df['projection'] == 0) & (df['salary'] > 8000)
+        if zero_proj_high_sal.any():
+            # Estimate: $1000 salary ≈ 1.5 fantasy points
+            df.loc[zero_proj_high_sal, 'projection'] = (df.loc[zero_proj_high_sal, 'salary'] / 1000 * 1.5).round(1)
     
     if 'salary' not in df.columns:
         df['salary'] = 3000
-    
     if 'name' not in df.columns:
-        df['name'] = 'Unknown Player'
-    
+        df['name'] = 'Unknown'
     if 'position' not in df.columns:
         df['position'] = 'FLEX'
-    
     if 'team' not in df.columns:
         df['team'] = 'UNK'
-    
     if 'ownership' not in df.columns:
         df['ownership'] = 0.0
     
-    # Calculate value if not present
+    # Showdown-specific: Add CPT and FLEX eligibility
+    if is_showdown:
+        if 'CPT' not in df.columns:
+            df['CPT'] = 1  # All players eligible for Captain
+        if 'FLEX' not in df.columns:
+            df['FLEX'] = 1  # All players eligible for Flex
+        
+        # Store original position
+        if 'original_position' not in df.columns:
+            df['original_position'] = df['position']
+    
+    # Calculate value
     if 'value' not in df.columns:
         df['value'] = (df['projection'] / df['salary'].replace(0, 1) * 1000).round(2)
     
