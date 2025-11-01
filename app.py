@@ -1109,7 +1109,8 @@ def main():
             
             config = {
                 'salary_cap': 50000,
-                'optimization_method': 'genetic' if not preset_name or CONTEST_PRESETS.get(preset_name, ContestPreset('','',0,0,0,0,0,0,0,0,False,False)).use_genetic else 'greedy'
+                'optimization_method': 'genetic' if not preset_name or CONTEST_PRESETS.get(preset_name, ContestPreset('','',0,0,0,0,0,0,0,0,False,False)).use_genetic else 'greedy',
+                'contest_type': preset_name if preset_name in ['showdown', 'turbo'] else 'classic'
             }
             
             try:
