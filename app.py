@@ -64,11 +64,28 @@ from contest_selector import ContestPreset
 sys.path.insert(0, str(Path(__file__).parent))
 
 def fix_csv_columns(df):
-    """COMPLETE version - handles blanks"""
+    """COMPLETE version - handles blanks AND normalizes column names"""
+    # Normalize column names for case-insensitive matching
+    df.columns = df.columns.str.strip()  # Remove whitespace
+    
+    # Map common variations to standard names
+    column_mapping = {
+        'Cpt': 'CPT',
+        'cpt': 'CPT', 
+        'Flex': 'FLEX',
+        'flex': 'FLEX',
+        'Ownership': 'ownership',
+        'OWNERSHIP': 'ownership'
+    }
+    
+    df = df.rename(columns=column_mapping)
+    
+    # Handle name columns
     if 'first_name' in df.columns and 'last_name' in df.columns:
         df['name'] = (df['first_name'].fillna('') + ' ' +
                       df['last_name'].fillna('')).str.strip()
         df = df.drop(columns=['first_name', 'last_name'])
+    
     return df
 
 try:
