@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 try:
     from performance_monitor import timed, time_section
     PERFORMANCE_MONITORING_AVAILABLE = True
-    logger.info("âœ… Performance monitoring enabled")
+    logger.info("Ã¢Å“â€¦ Performance monitoring enabled")
 except ImportError:
     # Fallback no-op decorator if module not available
     def timed(category='default', track_memory=False):
@@ -71,7 +71,7 @@ except ImportError:
             return func
         return decorator
     PERFORMANCE_MONITORING_AVAILABLE = False
-    logger.warning("âš ï¸ Performance monitoring not available")
+    logger.warning("Ã¢Å¡Â Ã¯Â¸Â Performance monitoring not available")
 
 
 
@@ -384,7 +384,7 @@ class ExposureManager:
                 'Count': int((exp_pct / 100) * len(lineups)),
                 'Salary': int(player_info['salary']),
                 'Projection': round(float(player_info['projection']), 1),
-                'Compliant': 'Ã¢Å“â€œ' if is_compliant else 'Ã¢Å“â€”'
+                'Compliant': 'ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“' if is_compliant else 'ÃƒÂ¢Ã…â€œÃ¢â‚¬â€'
             })
         
         return pd.DataFrame(report_data)
@@ -910,7 +910,7 @@ class LineupFilter:
                 logger.warning(f"All lineups filtered out at filter: {filter_type}")
                 break
         
-        logger.info(f"Batch filtering: {len(lineups)} Ã¢â€ â€™ {len(filtered)} lineups")
+        logger.info(f"Batch filtering: {len(lineups)} ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ {len(filtered)} lineups")
         return filtered
 
 
@@ -1322,8 +1322,11 @@ class LineupOptimizer:
         self.config = config
         self.salary_cap = config.get('salary_cap', 50000)
         
-        # Detect Showdown contest type
-        self.is_showdown = config.get('contest_type') == 'showdown'
+        # Detect Showdown contest type - check both contest_type and contest_preset
+        self.is_showdown = (
+            config.get('contest_type') == 'showdown' or 
+            config.get('contest_preset') == 'showdown'
+        )
         
         # Set positions based on contest type
         if self.is_showdown:
@@ -1693,12 +1696,12 @@ class LineupOptimizer:
         remaining_salary -= captain_dict['salary']
         available = available[available['name'] != captain['name']]
         
-        # Pick 5 FLEX players
+        # Pick 5 FLEX players - iteratively select to respect salary cap
         flex_pool = available[available['salary'] <= remaining_salary].copy()
-        flex_players = flex_pool.nlargest(5, 'composite_score')
+        flex_pool = flex_pool.sort_values('composite_score', ascending=False)
         
-        for _, player in flex_players.iterrows():
-            if len(lineup_players) >= 6:
+        for _, player in flex_pool.iterrows():
+            if len(lineup_players) >= 6:  # 1 CPT + 5 FLEX
                 break
             if player['salary'] <= remaining_salary:
                 player_dict = player.to_dict()
