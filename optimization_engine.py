@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 try:
     from performance_monitor import timed, time_section
     PERFORMANCE_MONITORING_AVAILABLE = True
-    logger.info("Ã¢Å“â€¦ Performance monitoring enabled")
+    logger.info("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Performance monitoring enabled")
 except ImportError:
     # Fallback no-op decorator if module not available
     def timed(category='default', track_memory=False):
@@ -71,7 +71,7 @@ except ImportError:
             return func
         return decorator
     PERFORMANCE_MONITORING_AVAILABLE = False
-    logger.warning("Ã¢Å¡Â Ã¯Â¸Â Performance monitoring not available")
+    logger.warning("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Performance monitoring not available")
 
 
 
@@ -302,6 +302,8 @@ class ExposureManager:
         """
         Check if adding this lineup would violate hard exposure rules.
         
+        FIX #1: Adaptive checking - only enforces after 80% completion
+        
         Returns:
             True if lineup can be added, False if it would violate
         """
@@ -309,12 +311,17 @@ class ExposureManager:
         if total_target_lineups == 1:
             return True
         
+        ## FIX #1: Only check exposure after 80% of lineups generated
+        min_lineups_threshold = max(1, int(total_target_lineups * 0.8))
+        if len(existing_lineups) < min_lineups_threshold:
+            return True  # Don't enforce until near completion
+        
         # Calculate exposure including this candidate
         test_lineups = existing_lineups + [candidate_lineup]
         exposure = self.calculate_current_exposure(test_lineups)
         
         # Project to final portfolio size
-        projection_multiplier = total_target_lineups / len(test_lineups)
+        projection_multiplier = total_target_lineups / len(test_lineups) if len(test_lineups) > 0 else 1.0
         
         # Check hard rules only
         for rule in self.exposure_rules:
@@ -346,10 +353,11 @@ class ExposureManager:
                     if player_exp > rule.max_exposure:
                         return False
         
-        # Check global max
+        # Check global max (with 10% buffer)
         for player, exp in exposure.items():
             projected_exp = exp * projection_multiplier
-            if projected_exp > self.global_max_exposure:
+            ## FIX #1b: Add 10% buffer to avoid overly strict filtering
+            if projected_exp > (self.global_max_exposure * 1.1):
                 return False
         
         return True
@@ -384,7 +392,7 @@ class ExposureManager:
                 'Count': int((exp_pct / 100) * len(lineups)),
                 'Salary': int(player_info['salary']),
                 'Projection': round(float(player_info['projection']), 1),
-                'Compliant': 'ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“' if is_compliant else 'ÃƒÂ¢Ã…â€œÃ¢â‚¬â€'
+                'Compliant': 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ' if is_compliant else 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'
             })
         
         return pd.DataFrame(report_data)
@@ -910,7 +918,7 @@ class LineupFilter:
                 logger.warning(f"All lineups filtered out at filter: {filter_type}")
                 break
         
-        logger.info(f"Batch filtering: {len(lineups)} ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ {len(filtered)} lineups")
+        logger.info(f"Batch filtering: {len(lineups)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ {len(filtered)} lineups")
         return filtered
 
 
@@ -1396,16 +1404,27 @@ class LineupOptimizer:
         """
         method = self.config.get('optimization_method', 'genetic')
         
-        # Generate larger pool
-        pool_size = num_lineups * 3
+        ## FIX #2: Intelligent pool sizing based on requested lineups
+        if num_lineups <= 20:
+            pool_multiplier = 3
+        elif num_lineups <= 100:
+            pool_multiplier = 5
+        else:
+            pool_multiplier = 10
+        
+        pool_size = num_lineups * pool_multiplier
+        logger.info(f"Generating {pool_size} candidate lineups for {num_lineups} requested (multiplier: {pool_multiplier}x)")
         
         if method == 'genetic' and self.config.get('use_genetic', True):
             candidate_lineups = self._generate_genetic(pool_size)
         else:
             candidate_lineups = self._generate_greedy(pool_size)
         
+        logger.info(f"Generated {len(candidate_lineups)} candidate lineups before filtering")
+        
         # v6.2.0: Filter with exposure awareness
         selected_lineups = []
+        rejected_by_exposure = 0
         
         for candidate in candidate_lineups:
             if len(selected_lineups) >= num_lineups:
@@ -1418,17 +1437,30 @@ class LineupOptimizer:
                 num_lineups
             ):
                 selected_lineups.append(candidate)
+            else:
+                rejected_by_exposure += 1
+        
+        logger.info(f"After exposure filtering: {len(selected_lineups)} lineups ({rejected_by_exposure} rejected)")
         
         # v6.2.0: Apply filtering
+        before_dedup = len(selected_lineups)
         selected_lineups = self.lineup_filter.remove_exact_duplicates(selected_lineups)
+        logger.info(f"After deduplication: {len(selected_lineups)} lineups ({before_dedup - len(selected_lineups)} removed)")
         
-        diversity_threshold = self.config.get('diversity_threshold', 4.0)
+        ## FIX #4: Adaptive diversity threshold
+        if self.is_showdown:
+            diversity_threshold = self.config.get('diversity_threshold', 2.0)
+        else:
+            diversity_threshold = self.config.get('diversity_threshold', 3.0)
         if diversity_threshold > 0:
+            before_diversity = len(selected_lineups)
             selected_lineups = self.lineup_filter.remove_similar_lineups(
                 selected_lineups,
                 min_unique_players=int(diversity_threshold)
             )
+            logger.info(f"After diversity filtering: {len(selected_lineups)} lineups ({before_diversity - len(selected_lineups)} removed)")
         
+        logger.info(f"FINAL: {len(selected_lineups)} lineups generated successfully")
         return selected_lineups
     
     def generate_portfolio_tiered(
@@ -1594,12 +1626,18 @@ class LineupOptimizer:
         }
     
     def _generate_greedy(self, num_lineups: int) -> List[Dict]:
-        """Generate lineups using greedy algorithm."""
+        """Generate lineups using greedy algorithm with randomization (FIX #3)."""
         lineups = []
         used_players = set()
         
+        logger.info(f"Starting greedy generation: {num_lineups} lineups")
+        
+        ## FIX #3: Add randomization for diversity
         for i in range(num_lineups):
-            lineup = self._build_single_lineup(used_players)
+            randomize = (i > 0)  # First lineup pure greedy, rest randomized
+            temperature = min(0.15 * (i / max(1, num_lineups)), 0.15)
+            
+            lineup = self._build_single_lineup(used_players, randomize=randomize, temperature=temperature)
             if lineup:
                 lineups.append(lineup)
                 for player in lineup['players']:
@@ -1610,20 +1648,33 @@ class LineupOptimizer:
         
         return lineups
     
-    def _build_single_lineup(self, exclude_players: Set[str]) -> Optional[Dict]:
-        """Build a single optimized lineup."""
+    def _build_single_lineup(self, exclude_players: Set[str], 
+                            randomize: bool = False, 
+                            temperature: float = 0.0) -> Optional[Dict]:
+        """Build a single optimized lineup with optional randomization (FIX #3)."""
         available = self.player_pool[
             ~self.player_pool['name'].isin(exclude_players)
         ].copy()
         
         # Handle Showdown separately
         if self.is_showdown:
-            return self._build_showdown_lineup(available)
+            return self._build_showdown_lineup(available, randomize, temperature)
         
         if len(available) < sum(self.positions.values()):
             return None
         
         available['composite_score'] = self._calculate_composite_score(available)
+        
+        ## FIX #3b: Add randomization noise to composite scores if requested
+        if randomize and temperature > 0:
+            try:
+                noise = np.random.normal(0, temperature, len(available))
+                available['randomized_score'] = available['composite_score'] + noise
+                score_column = 'randomized_score'
+            except Exception:
+                score_column = 'composite_score'
+        else:
+            score_column = 'composite_score'
         
         lineup_players = []
         remaining_salary = self.salary_cap
@@ -1632,7 +1683,7 @@ class LineupOptimizer:
             if pos == 'FLEX':
                 continue
                 
-            pos_players = available[available['position'] == pos].nlargest(count, 'composite_score')
+            pos_players = available[available['position'] == pos].nlargest(count, score_column)
             
             for _, player in pos_players.iterrows():
                 if player['salary'] <= remaining_salary:
@@ -1642,7 +1693,7 @@ class LineupOptimizer:
         
         if 'FLEX' in self.positions:
             flex_eligible = available[available['position'].isin(['RB', 'WR', 'TE'])]
-            flex_player = flex_eligible[flex_eligible['salary'] <= remaining_salary].nlargest(1, 'composite_score')
+            flex_player = flex_eligible[flex_eligible['salary'] <= remaining_salary].nlargest(1, score_column)
             
             if not flex_player.empty:
                 lineup_players.append(flex_player.iloc[0].to_dict())
@@ -1667,8 +1718,10 @@ class LineupOptimizer:
             'correlation_score': correlation_score
         }
     
-    def _build_showdown_lineup(self, available: pd.DataFrame) -> Optional[Dict]:
-        """Build Showdown lineup with CPT + 5 FLEX."""
+    def _build_showdown_lineup(self, available: pd.DataFrame,
+                               randomize: bool = False,
+                               temperature: float = 0.0) -> Optional[Dict]:
+        """Build Showdown lineup with CPT + 5 FLEX with randomization (FIX #3)."""
         if len(available) < 6:
             return None
         
@@ -1685,7 +1738,32 @@ class LineupOptimizer:
         if captain_pool.empty:
             return None
         
-        captain = captain_pool.nlargest(1, 'composite_score').iloc[0]
+        ## FIX #3d: Temperature-based captain selection
+        if randomize and temperature > 0:
+            try:
+                # Take top N captains and do weighted random selection
+                top_n = min(8, len(captain_pool))
+                top_captains = captain_pool.nlargest(top_n, 'composite_score')
+                
+                # Add noise to scores for weighted selection
+                scores = top_captains['composite_score'].values
+                noise = np.random.normal(0, temperature * np.mean(scores), len(scores))
+                noisy_scores = scores + noise
+                noisy_scores = np.maximum(noisy_scores, 0)  # Keep positive
+                
+                # Weighted random selection
+                if noisy_scores.sum() > 0:
+                    weights = noisy_scores / noisy_scores.sum()
+                    captain_idx = np.random.choice(len(top_captains), p=weights)
+                    captain = top_captains.iloc[captain_idx]
+                else:
+                    captain = top_captains.iloc[0]
+            except Exception as e:
+                logger.warning(f"Error in random captain selection: {e}")
+                captain = captain_pool.nlargest(1, 'composite_score').iloc[0]
+        else:
+            # Pure greedy: best captain
+            captain = captain_pool.nlargest(1, 'composite_score').iloc[0]
         captain_dict = captain.to_dict()
         captain_dict['position'] = 'CPT'
         captain_dict['salary'] = int(captain['salary'] * 1.5)
@@ -1698,7 +1776,18 @@ class LineupOptimizer:
         
         # Pick 5 FLEX players - iteratively select to respect salary cap
         flex_pool = available[available['salary'] <= remaining_salary].copy()
-        flex_pool = flex_pool.sort_values('composite_score', ascending=False)
+        
+        ## FIX #3e: FLEX selection with randomization
+        if randomize and temperature > 0:
+            try:
+                # Add noise to composite scores
+                noise = np.random.normal(0, temperature, len(flex_pool))
+                flex_pool['randomized_score'] = flex_pool['composite_score'] + noise
+                flex_pool = flex_pool.sort_values('randomized_score', ascending=False)
+            except Exception:
+                flex_pool = flex_pool.sort_values('composite_score', ascending=False)
+        else:
+            flex_pool = flex_pool.sort_values('composite_score', ascending=False)
         
         for _, player in flex_pool.iterrows():
             if len(lineup_players) >= 6:  # 1 CPT + 5 FLEX
@@ -1756,20 +1845,34 @@ class LineupOptimizer:
         generations = 50
         mutation_rate = 0.15
         
+        ## FIX #5: Build initial population with randomization for diversity
         population = []
-        for _ in range(population_size):
-            lineup = self._build_single_lineup(set())
+        for i in range(population_size):
+            # First 10% are pure greedy, rest are randomized
+            randomize = (i >= population_size * 0.1)
+            temperature = 0.10 if randomize else 0.0
+            
+            lineup = self._build_single_lineup(set(), randomize=randomize, temperature=temperature)
             if lineup:
                 population.append(lineup)
         
         if not population:
+            logger.warning("Failed to build initial genetic population")
             return []
+        
+        logger.info(f"Built initial genetic population of {len(population)} lineups")
         
         for gen in range(generations):
             for lineup in population:
                 lineup['fitness'] = self._calculate_fitness(lineup)
             
             population.sort(key=lambda x: x.get('fitness', 0), reverse=True)
+            
+            # Progress logging
+            if gen % 10 == 0:
+                best_fitness = population[0].get('fitness', 0)
+                logger.info(f"Generation {gen}: Best fitness = {best_fitness:.4f}")
+            
             new_population = population[:population_size // 3]
             
             while len(new_population) < population_size:
